@@ -1,0 +1,646 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Coag Beaker Comment Browser</title>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --panel: #f7f7f8;
+      --text: #0f172a;
+      --muted: #475569;
+      --border: #e5e7eb;
+      --chip: #eef2ff;
+      --chipText: #3730a3;
+      --accent: #111827;
+      --shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 16px rgba(0,0,0,.04);
+      --radius: 14px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: var(--sans); color: var(--text); background: var(--bg); }
+    header {
+      position: sticky; top: 0; z-index: 5;
+      backdrop-filter: blur(8px);
+      background: rgba(255,255,255,.85);
+      border-bottom: 1px solid var(--border);
+    }
+    .topbar {
+      max-width: 1240px; margin: 0 auto; padding: 14px 18px;
+      display: flex; gap: 14px; align-items: center; justify-content: space-between;
+    }
+    .title { display: flex; flex-direction: column; gap: 2px; }
+    .title h1 { font-size: 16px; margin: 0; letter-spacing: .2px; }
+    .title .sub { font-size: 12px; color: var(--muted); }
+    .layout {
+      max-width: 1240px; margin: 0 auto; padding: 18px;
+      display: grid; grid-template-columns: 320px 1fr; gap: 16px;
+    }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
+    .panel .hd {
+      padding: 14px 14px 10px 14px;
+      border-bottom: 1px solid var(--border);
+      display:flex; align-items:center; justify-content:space-between; gap: 10px;
+    }
+    .panel .hd h2 { font-size: 13px; margin: 0; color: var(--muted); font-weight: 600; letter-spacing: .2px; }
+    .panel .bd { padding: 12px 14px 14px 14px; }
+    .search { width: 520px; max-width: 60vw; display:flex; gap: 10px; align-items:center; }
+    input[type="search"] {
+      width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border);
+      outline: none; background: #fff;
+    }
+    .btn { border: 1px solid var(--border); background: #fff; border-radius: 12px; padding: 10px 12px; cursor: pointer; color: var(--accent); }
+    .btn:hover { filter: brightness(.98); }
+    select {
+      width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border);
+      background: #fff; outline: none;
+    }
+    .row { display:grid; grid-template-columns: 1fr; gap: 10px; margin-bottom: 12px; }
+    .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .tree { display:flex; flex-direction: column; gap: 6px; }
+    .tree button {
+      width: 100%; text-align: left; border: 1px solid var(--border); background: #fff;
+      border-radius: 12px; padding: 10px 12px; cursor: pointer;
+      display:flex; justify-content:space-between; align-items:center; gap: 10px;
+    }
+    .tree button.active { border-color: #c7d2fe; background: #eef2ff; }
+    .count { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+    .results { padding: 14px; }
+    .meta { display:flex; align-items:center; justify-content:space-between; gap: 12px; color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+    .cards { display:flex; flex-direction: column; gap: 10px; }
+    details.card { border: 1px solid var(--border); background: #fff; border-radius: 14px; overflow: hidden; box-shadow: var(--shadow); }
+    details.card summary {
+      list-style: none; cursor: pointer; padding: 12px 14px;
+      display:flex; align-items:flex-start; justify-content:space-between; gap: 12px;
+    }
+    details.card summary::-webkit-details-marker { display:none; }
+    .code { font-family: var(--mono); font-weight: 700; letter-spacing: .4px; }
+    .cat { color: var(--muted); font-size: 12px; }
+    .left { display:flex; flex-direction: column; gap: 2px; min-width: 180px; }
+    .chips { display:flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+    .chip {
+      font-size: 11px; padding: 4px 8px; border-radius: 999px;
+      background: var(--chip); color: var(--chipText); border: 1px solid #c7d2fe;
+      font-family: var(--mono); white-space: nowrap;
+    }
+    .chip.low { background:#ecfeff; border-color:#a5f3fc; color:#155e75; }
+    .chip.high { background:#fef2f2; border-color:#fecaca; color:#7f1d1d; }
+    .chip.normal { background:#f0fdf4; border-color:#bbf7d0; color:#14532d; }
+    .chip.pending { background:#fffbeb; border-color:#fde68a; color:#78350f; }
+    .chip.uninterpretable { background:#f8fafc; border-color:#cbd5e1; color:#334155; }
+    .body { border-top: 1px solid var(--border); padding: 12px 14px 14px 14px; }
+    pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: var(--sans); line-height: 1.35; }
+    .toolbar { display:flex; gap: 8px; align-items:center; }
+    .pill { font-size: 12px; color: var(--muted); }
+    .hint { font-size: 12px; color: var(--muted); padding-top: 6px; }
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; }
+      .search { width: 100%; max-width: none; }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <div class="topbar">
+    <div class="title">
+      <h1>Coag Beaker Comment Browser</h1>
+      <div class="sub">Hardcoded dataset • Filter + search ETX codes/comments</div>
+    </div>
+    <div class="search">
+      <input id="q" type="search" placeholder="Search (e.g., apixaban, DRVVT, Protein S low, mixing)…" />
+      <button class="btn" id="resetBtn" title="Clear filters">Reset</button>
+    </div>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="panel" aria-label="Filters">
+    <div class="hd"><h2>Browse</h2><span class="count" id="totalCount"></span></div>
+    <div class="bd">
+      <div class="row">
+        <label class="pill">Category</label>
+        <div class="tree" id="catTree"></div>
+        <div class="hint">Tip: use search for specific terms (e.g., apixaban, DRVVT, Protein S low, mixing).</div>
+      </div>
+
+      <div class="row">
+        <label class="pill">Sort</label>
+        <select id="sort">
+          <option value="relevance">Best match</option>
+          <option value="code">Code (A→Z)</option>
+          <option value="category">Category</option>
+        </select>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" aria-label="Results">
+    <div class="hd">
+      <h2>Results</h2>
+      <div class="toolbar">
+        <span class="count" id="resultCount"></span>
+      </div>
+    </div>
+    <div class="results">
+      <div class="meta" id="metaLine"></div>
+      <div class="cards" id="cards"></div>
+    </div>
+  </section>
+
+  <section class="panel" aria-label="Comment Builder">
+    <div class="hd"><h2>Comment Builder</h2></div>
+    <div class="bd">
+      <div class="row">
+        <label class="pill">Type codes and press F8 to expand, or click + on codes to add</label>
+        <textarea id="commentBuilder" rows="10" style="width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); font-family: var(--sans); resize: vertical;" placeholder="Type codes here (e.g., N1 L1 D1) and press F8 to expand them to full comments..."></textarea>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+// ------------------------- HARD-CODED DATASET -------------------------
+const RAW = [{"code": "NN1", "comment": "The PTT-LA and DRVVT screening tests are negative for a lupus anticoagulant."}, {"code": "NN2", "comment": "The PTT-LA and DRVVT screens are negative for a lupus anticoagulant.  The IgM/IgG anticardiolipin antibodies and IgM/IgG anti-beta2-glycoprotein I antibodies are not elevated."}, {"code": "NN3", "comment": "1. The PT and PTT are normal. \n\n2. The PTT-LA and DRVVT screens are negative for a lupus anticoagulant.  The IgG and IgM anticardiolipin antibodies and the IgG and IgM anti-beta2-glycoprotein I antibodies are not elevated."}, {"code": "L1", "comment": "The PTT-LA lupus anticoagulant screen is negative."}, {"code": "L2", "comment": "The PTT-LA screen is uninterpretable due to {apixaban;rivaroxaban}.  The confirmatory hexagonal phase assay is {negative;positive}.  Taken together, the result is {negative;positive} for a lupus anticoagulant."}, {"code": "L4", "comment": "The PTT-LA lupus anticoagulant assay required confirmation by a second assay because it was initially prolonged {and did not correct; but corrected} in a 1:1 mix. The confirmatory hexagonal phase assay is {negative; positive}. Taken together, the results are {negative;positive}  for a lupus anticoagulant."}, {"code": "LH", "comment": "Lupus anticoagulant tests were performed after removal of heparin from the specimen."}, {"code": "D1", "comment": "The DRVVT test is NEGATIVE for a lupus anticoagulant."}, {"code": "D2", "comment": "The DRVVT test is POSITIVE for a lupus anticoagulant."}, {"code": "DU", "comment": "The DRVVT test cannot be interpreted in the context of {apixaban;rivaroxaban;warfarin}."}, {"code": "APS", "comment": "The diagnosis of antiphospholipid antibody syndrome (APLAS) requires at least one positive antiphospholipid antibody test (e.g., positive hexagonal phase PTT-LA OR positive DRVVT OR anticardiolipin/anti-beta2-glycoprotein I) as well as thrombosis or pregnancy complications. Persistently positive tests and proximity to the clinical event increase the likelihood of APLAS. If clinically indicated, repeat testing at least 12 weeks from the positive result. For updated criteria please see PMID 37635643."}, {"code": "ABM", "comment": "The {IgM anticardiolipin antibody; IgG anticardiolipin antibody; IgM anti-beta2-glycoprotein I antibody; IgG anti-beta2-glycoprotein I antibody} is moderately elevated. Although this value is above the reference range, values under 40 do not count toward the diagnosis of antiphospholipid antibody syndrome. For updated criteria please see PMID 37635643. {IgM anticardiolipin antibody; IgG anticardiolipin antibody; IgM anti-beta2-glycoprotein I antibody; IgG anti-beta2-glycoprotein I antibody} {is; are} normal."}, {"code": "ABH", "comment": "The {IgM anticardiolipin antibody; IgG anticardiolipin antibody; IgM anti-beta2-glycoprotein I antibody; IgG anti-beta2-glycoprotein I antibody} is markedly elevated. Positive anticardiolipin and/or anti-beta2-glycoprotein I values are considered titers of 40 and above. {IgM anticardiolipin antibody; IgG anticardiolipin antibody; IgM anti-beta2-glycoprotein I antibody; IgG anti-beta2-glycoprotein I antibody} {is;are} normal."}, {"code": "HEXP", "comment": "The hexagonal phase confirmation reagent is insensitive to interference from therapeutic concentrations of rivaroxaban, apixaban, and warfarin, and to CRP at levels below 200 mg/L (PMID: 38185483). Heparin, if detected, is removed prior to testing. However, if the patient is receiving dabigatran, argatroban, bivalirudin or hirudin anticoagulation, these anticoagulants can cause false positive lupus anticoagulant tests."}, {"code": "ABNORM", "comment": "The anticardiolipin antibody and anti-beta2-glycoprotein I antibodies are not elevated."}, {"code": "PTLUPRO", "comment": "Occasionally, lupus anticoagulants can prolong the PT by decreasing factor II or by artifactually interfering in the PT assay."}, {"code": "NOAB", "comment": "If clinically indicated, assays for IgG/IgM anti-beta2-glycoprotein I antibodies and/or IgG/IgM anticardiolipin antibodies can be performed on this specimen by request."}, {"code": "NODV", "comment": "Note that the lupus anticoagulant panel is incomplete because the DRVVT cannot be interpreted due to {rivaroxaban, apixaban, warfarin} interference. If clinically indicated, lupus anticoagulant testing can be repeated when the patient is no longer on this anticoagulant to allow for interpretation of the DRVVT result."}, {"code": "APLN", "comment": "1. The PT and PTT are within the reference ranges.\n\n2. No evidence of antiphospholipid antibodies. The DRVVT and PTT-LA screens are negative for a lupus anticoagulant. The IgG/IgM anti-beta2 glycoprotein I and IgG/IgM anticardiolipin antibodies are NOT elevated."}, {"code": "N1", "comment": "Protein C, protein S, and antithrombin III activity are normal."}, {"code": "WCS", "comment": "Protein C and S activities cannot be interpreted because of {rivaroxaban, apixaban, warfarin} exposure. If there is interest in determining if the patient has a hereditary deficiency of protein C or protein S, it will be necessary to evaluate the patient after therapy has been discontinued for at least 20 days and when the PT is normal (without plasma transfusion)."}, {"code": "CSAL", "comment": "Protein S, protein C and antithrombin III are decreased. These results can occur with liver dysfunction or consumption (thrombosis, DIC, or surgery). If relevant, it should be noted that warfarin or vitamin K deficiency decrease protein C and protein S. Heparin can decrease antithrombin III. It is difficult to assess for any underlying hereditary deficiency in these settings. If indicated, the assays can be repeated when the patient has recovered from any current illness and has not received warfarin or heparin for at least 10-20 days."}, {"code": "CAL1", "comment": "This patient has a prolonged PT and PTT, with abnormal liver function tests. The prolonged PT and PTT could be due to reduced hepatic synthesis of coagulation factors. Protein C, protein S, and antithrombin III are also synthesized in the liver and, therefore, liver disease can result in a low value for these proteins. Other possible contributing factors to consider, if relevant, include disseminated intravascular coagulation (DIC), recent thrombosis or surgery, or combined warfarin/heparin therapy."}, {"code": "CAL2", "comment": "Protein C and antithrombin III are decreased. These results occur most commonly due to liver dysfunction. Consumption (thrombosis, DIC, or surgery) can also cause these results. If relevant, it should be noted that warfarin or vitamin K deficiency decrease protein C, and heparin can decrease antithrombin III. It is difficult to assess for any underlying hereditary deficiency of one of these proteins in these settings. If indicated, the assays can be repeated when the patient has recovered from any current illness and has not received warfarin or heparin for at least 10 days."}, {"code": "SL2", "comment": "The value for protein S by functional assay was low with a normal protein S free antigen. Protein S can be decreased by acute phase reactions, estrogen use, pregnancy, or recent (within 20 days) warfarin discontinuation. If none of these conditions are applicable, the functional protein S may reflect the patient's true value, and at this level could represent a hereditary deficiency. If there is interest in excluding the possibility of a hereditary protein S deficiency, protein S assays should be repeated any time when the patient is stable and has not received estrogen or been pregnant for at least 3 months and has not received warfarin for at least 20 days. Alternatively, measuring protein S in first-degree family members or any relative with a history of venous thrombosis may be informative, because hereditary protein S deficiency has autosomal dominant inheritance."}, {"code": "SL3", "comment": "Protein S is decreased. If relevant, it should be noted that recent discontinuation of warfarin or acute phase reactions biologically decrease protein S. If none of these variables is involved, a hereditary protein S deficiency is possible. The normal fibrinogen and normal factor VIII are not suggestive of an acute phase reaction. The protein S assay may be repeated any time when the patient is stable and has not received warfarin for at least 20 days."}, {"code": "CSAH", "comment": "The value for {protein S; protein C; antithrombin III } is elevated.  Elevated values have no currently known clinical significance."}, {"code": "ECMO1", "comment": "The PTT is prolonged in this acutely ill patient on ECMO and heparin."}, {"code": "LAHU", "comment": "Antithrombin III is low. Full-dose heparin administration can cause slight decreases in antithrombin III within several days, secondary to increased clearance. It is not known to the laboratory if the patient has received heparin prior to the collection of the present specimen. Other causes of decreased antithrombin III include liver dysfunction, recent thrombosis or surgery, significant proteinuria, disseminated intravascular coagulation (DIC), or hereditary deficiency. If hereditary antithrombin III deficiency is suspected, the assay may be repeated once the patient has recovered from any current illness and has not received heparin for at least 1 to 2 weeks."}, {"code": "ECMO2", "comment": "Antithrombin III is low. In this acutely ill patient on ECMO and heparin, this finding may be transient. Low levels of antithrombin III may be associated with heparin resistance. If hereditary antithrombin III deficiency is suspected, and if no prior antithrombin III tests are normal outside the context of recent transfusion, retesting when the patient has recovered from this acute illness could be considered."}, {"code": "FVL1", "comment": "The activated protein C resistance assay is normal, indicating that there is no laboratory evidence for the factor V Leiden mutation."}, {"code": "FVL2", "comment": "This patient has activated protein C resistance (APCR) due to heterozygosity for the factor V Leiden mutation, which confers a 4-5 fold increased risk for a first episode of venous thromboembolism (VTE) compared with the risk of first VTE for controls.  Note that for patients who have had a first unprovoked VTE, heterozygosity for factor V Leiden does not confer a clinically relevant increased risk for recurrent VTE compared to control patients who have had a first unprovoked VTE."}, {"code": "FVL3", "comment": "This patient has activated protein C resistance (APCR) due to homozygosity for the factor V Leiden mutation. Risk for an initial episode of venous thromboembolism (VTE) for homozygotes is estimated to be 7-20x higher than for those with no factor V Leiden mutations. Relative risk for a recurrent VTE is less well-defined but is likely lower (1-7x) and may not be significantly higher than that for patients without factor V Leiden mutations who have also had at least one prior unprovoked thrombotic event. Note that these risk estimates are based on more recent studies (e.g., PMID: 15900005, 20368522) that found significantly lower risks than had previously been reported."}, {"code": "PTG1", "comment": "An assay for the prothrombin mutation G20210A is normal."}, {"code": "PTG2", "comment": "An assay for prothrombin G20210A is pending at this time. Results will be reported separately in the chart when available."}, {"code": "WRT", "comment": "If there is an interest in determining if the patient is hypercoagulable on the basis of activated protein C resistance (Factor V Leiden), the appropriate assay to order is activated protein C resistance."}, {"code": "TFN", "comment": "Note that this patient was recently transfused, which could affect these results."}, {"code": "PFH", "comment": "The prothrombin fragment 1 + 2 is slightly above the reference range. Prothrombin fragment 1 + 2 is produced when prothrombin (factor II) is converted to thrombin (factor IIa), an essential step in the clotting process. Thus, increases in prothrombin fragment 1 + 2 can be observed in conditions associated with active thrombosis (e.g., deep vein thrombosis, pulmonary embolism, disseminated intravascular coagulation, preeclampsia, trauma) and in hypercoagulable states (e.g., antithrombin III deficiency). Decreases in prothrombin fragment 1 + 2 can occur in patients undergoing anticoagulation therapy (e.g., with warfarin: PMID 7831679). Correlation with the patient's clinical status and other markers of thrombosis, such as D-dimer, is recommended."}, {"code": "PFN", "comment": "The prothrombin fragment 1 + 2 is normal."}, {"code": "WNL", "comment": "1. The PT and PTT are normal.  (TAB)  2. There is no evidence of a lupus anticoagulant.  The DRVVT and PTT-LA screens are negative.  The anticardiolipin antibody and anti-beta2-glycoprotein I antibodies are not elevated. (TAB) 3. The protein C, S, and ATIII are normal. (TAB) 4. The activated protein C resistance assay is normal, indicating that there is no laboratory evidence for the factor V Leiden mutation. 5. An assay for prothrombin G20210A is pending at this time. Results will be reported separately in the chart when available."}, {"code": "LSNOS", "comment": "Protein S is below the reference range. Possible causes for decreased protein S include pregnancy or peripartum states, estrogen-based therapy, anticoagulation (e.g., warfarin) therapy, inflammation, liver disease, consumption from disseminated intravascular coagulation or thrombosis, or hereditary factors. Decreased protein S may be associated with increased risk of thrombosis. If a hereditary deficiency is suspected, the protein S assays (activity and antigen level) may be repeated any time when the patient is stable, and has not received warfarin for at least 20 days and is not receiving other anticoagulant therapy. If indicated, measuring protein S in first-degree family members or any relative with a history of venous thrombosis may be informative, because hereditary protein S deficiency has autosomal dominant inheritance."}, {"code": "VN1", "comment": "Von Willebrand factor antigen, von Willebrand factor activity, and factor VIII activity are within the reference ranges. There is no laboratory evidence for von Willebrand disease. Note that inflammatory states or pregnancy can increase von Willebrand factor and factor VIII levels, thus obscuring the diagnosis of hereditary von Willebrand disease. Clinical correlation is advised."}, {"code": "VN2", "comment": "Von Willebrand factor antigen, von Willebrand factor activity, and factor VIII activity are within the reference ranges. The patient has a history of von Willebrand disease. Note that inflammatory states or pregnancy can increase von Willebrand factor and factor VIII levels, thus obscuring the diagnosis of hereditary von Willebrand disease. Clinical correlation is advised."}, {"code": "ABOCOAG", "comment": "The blood type of this patient is {A ; B; AB; O} obtained by {chart review; front type only}. Type O individuals typically have lower levels of VWF."}, {"code": "DN", "comment": "Von Willebrand factor antigen, von Willebrand factor activity, and factor VIII activity are {within; above} the reference ranges. The patient has a history of von Willebrand disease and has been treated with desmopressin. Clinical correlation is advised."}, {"code": "PN", "comment": "Von Willebrand factor antigen, von Willebrand factor activity, and factor VIII activity are {within; above} the reference ranges. The patient has a history of von Willebrand disease and has been treated with {VWF concentrate, desmopressin}. Clinical correlation is advised."}, {"code": "INF", "comment": "Von Willebrand factor antigen, von Willebrand factor activity, and factor VIII activity are above the reference ranges. These findings are consistent with an acute inflammatory condition. There is no laboratory evidence for von Willebrand disease. Note that inflammatory states or pregnancy can increase von Willebrand factor and factor VIII levels, thus obscuring the diagnosis of hereditary von Willebrand disease. Clinical correlation is advised."}, {"code": "DHR", "comment": "Von Willebrand factor antigen, von Willebrand factor activity, and factor VIII activity are {within; above} the reference ranges approximately {one hour; four hours} after receiving desmopressin. Desmopressin responsiveness is defined as an increase of at least &gt;2 times the baseline VWF activity level and a sustained increase of both VWF and factor VIII (FVIII) levels &gt;50 IU/dL for at least 4 hours (Blood Adv. 2021 Jan 26;5(2):565-569. PMID: 33496750). Clinical correlation is advised."}, {"code": "3050A", "comment": "Reduced levels of von Willebrand antigen, and von Willebrand activity. The FVIII is {reduced;normal}. VWF levels between 30-50 IU/dL may be consistent with type 1 von Willebrand disease if there is a concurrent bleeding phenotype; however, the VWF:Act to VWF:Ag ratio is &lt; 0.7 in this patient raises the possibility of type 2 von Willebrand disease (Blood Adv. 2021 Jan 12;5(1):280-300. PMID: 33570651). Repeat or additional studies, including correlation with VWF:GPIbM and/or VWF multimer analysis, are recommended to fully characterize and subtype if not already done previously. Clinical correlation is advised. Note that inflammatory states or pregnancy can increase factor VIII activity and von Willebrand levels, thus obscuring the diagnosis of hereditary von Willebrand disease."}, {"code": "3050N", "comment": "Reduced levels of von Willebrand antigen, and von Willebrand activity. The FVIII is {reduced;normal}. VWF levels between 30-50 IU/dL may be consistent with type 1 von Willebrand disease if there is a concurrent bleeding phenotype. Repeat or additional studies, including correlation with VWF:GPIbM and/or VWF multimer analysis, are recommended to fully characterize and subtype if not already done previously. Clinical correlation is advised. Note that inflammatory states or pregnancy can increase factor VIII activity and von Willebrand levels, thus obscuring the diagnosis of hereditary von Willebrand disease."}, {"code": "LOW1", "comment": "Reduced levels of factor VIII activity, von Willebrand antigen, and von Willebrand activity, and the VWF:Act to VWF:Ag ratio is &gt;= 0.7, consistent with type 1 von Willebrand disease. Repeat or additional studies are recommended if clinically indicated. Clinical correlation is advised."}, {"code": "LOW2", "comment": "Reduced levels of factor VIII activity, von Willebrand antigen, and von Willebrand activity, with a VWF:Act to VWF:Ag ratio &amp;lt; 0.7, raising the possibility of type 2 von Willebrand disease. Repeat or additional studies, including correlation with VWF:GPIbM and/or VWF multimer analysis, are recommended to fully characterize and subtype if not already done previously. Clinical correlation is advised."}, {"code": "LOW3", "comment": "Reduced levels of factor VIII activity, von Willebrand antigen, and von Willebrand activity, with a FVIII to VWF:Ag ratio &lt; 0.7, raising the possibility of type 2N von Willebrand disease. Repeat or additional studies, including correlation with VWF:FVIIIB and/or genetic testing, are recommended to fully characterize and subtype if not already done previously. Clinical correlation is advised."}, {"code": "RATIO", "comment": "Normal levels of Factor VIII, von Willebrand antigen, and von Willebrand activity levels with an activity to an levels with a VWF:Ag ratio of ***,  raising the possibility of acquired in the context of of the patient's known {Waldenström macroglobulinemia; thrombocythemia; aortic stenosis; requirement for ECMO/mechanical circulatory support}."}, {"code": "ACQ", "comment": "Reduced levels of factor VIII activity, von Willebrand antigen, and von Willebrand activity. In the setting of the patient's known {Waldenström macroglobulinemia; thrombocythemia; aortic stenosis; requirement for ECMO/mechanical circulatory support}, the findings are consistent with an acquired von Willebrand syndrome, although a hereditary von Willebrand disease cannot be ruled out. Correlation with VWF multimer analysis is recommended if not previously performed."}, {"code": "NEO", "comment": "Von Willebrand factor is typically elevated above a patient's baseline at birth, decreasing to baseline by age 6 months.  Therefore, repeat testing can be performed after age 6 months, if indicated, to determine if the values are lower than they are currently."}, {"code": "10L", "comment": "Causes of decreased factor X include warfarin, vitamin K deficiency, liver dysfunction, DIC, amyloidosis, and a hereditary deficiency.  If the patient has been receiving warfarin recently, the value for factor X does not reflect the patient's true baseline level.  Factor X is one of the last vitamin K dependent factors to return to normal levels following cessation of warfarin therapy or administration of vitamin K."}, {"code": "10A", "comment": "Factor X is  {low; normal; above the reference range}. Factor X deficiency is the most common coagulation factor deficiency in patients with AL amyloidosis (see PMID: 11238135)."}, {"code": "VW8", "comment": "Factor VIII activity below the reference range in a patient with known von Willebrand disease."}, {"code": "VK", "comment": "The factor assays, PT, and PTT results are most suggestive of warfarin use or vitamin K deficiency."}, {"code": "PTTHI", "comment": "If the factor VIII, IX, or XI assays were ordered to assess for hypercoagulability, one study found that factor IX levels above 129% or factor XI &gt;= 121% had a 2-3 fold increased odds ratio for venous thrombosis (PMID: 10845896).  Another study found that patients with venous thrombosis and factor VIII  above 234% had a 6.7 fold increased relative risk for recurrent thrombosis (PMID: 10950667)."}, {"code": "NEOCOAG", "comment": "Neonatal coagulation factor activity levels vary widely (PMID: 34752018), hence it is difficult to draw conclusions about hereditary deficiency based on a single time point. Recommend repeat studies in six months. Clinical correlation is advised."}, {"code": "HL", "comment": "Chromogenic FVIII is *** %in this patient on emicizumab. Clot-based FVIII is *** %. In patients on emicizumab, the chromogenic FVIII measures either endogenously produced or administered FVIII and does not measure the effect of emicizumab. For this reason, there may be a discordance between the single-stage clot-based FVIII level, which does measure the effect of emicizumab, and the chromogenic FVIII."}, {"code": "HBP", "comment": "Factor IX activity is within the reference range in a patient with known hemophilia B {who is receiving; who recently received} factor IX concentrate."}, {"code": "HAP", "comment": "Factor VIII is *** % in this patient with known hemophilia A who is receiving {advate; jivi; eloctate; recombinant FVIII}"}, {"code": "HA", "comment": "The PTT is markedly elevated. There is no evidence for the presence of heparin or a lupus anticoagulant in the specimen. Factor VIII is less than 1%. The mixing study shows no evidence for a factor VIII inhibitor. These results are most consistent with hemophilia A. Other possibilities, such as severe type 3 VWD, are less likely."}, {"code": "FXA", "comment": "The values for the factor studies should be interpreted in the context of {apixaban;rivaroxaban;warfarin} exposure, which may cause artificially low factor level results. Therefore, the level is at least as high as the number reported (as denoted by a  &gt; > sign in the result)."}, {"code": "FLUP", "comment": "The factor levels increase with dilution in this specimen, which is likely to be due to the lupus anticoagulant.  If the result never reached linearity, it is reported with a &gt; sign.  The factor activity is as high or higher than the number reported."}, {"code": "FC", "comment": "The factor assays, PT, and PTT results are most suggestive of warfarin use or vitamin K deficiency."}, {"code": "CXT", "comment": "Chromogenic X is typically used to monitor warfarin in a patient in whom the INR is unreliable due to a lupus anticoagulant.  This level of Chromogenic X suggests {an INR of approximately 2-3; subtherapeutic warfarin; an INR>3}"}, {"code": "ATI", "comment": "This patient is on efanesoctocog alfa (Altuviiio), and it is assumed that there are no other FVIII present. Chromogenic FVIII is ***, which is likely an overestimate.  In-house testing with Altuviiio standards suggests that the true value can be estimated by dividing the chromogenic value by 2.5 or by dividing the clot-based factor by 0.6. Over time, the uncorrected chromogenic and clot-based values converge. Pharmakokinetics may vary by indivicual."}, {"code": "8H", "comment": "Factor VIII is elevated at *** %.  Factor VIII becomes elevated during acute phase reactions.  If the purpose of this assay was to exclude DIC, it can be noted that a normal or elevated factor VIII does not by itself exclude DIC, if DIC is clinically suspected.  On the other hand, a decreased factor VIII would be suggestive of DIC, if DIC were clinically suspected."}, {"code": "7L", "comment": "Reduced factor VII activity, which may represent warfarin administration, vitamin K deficiency, liver disease, or (rarely) a hereditary deficiency."}, {"code": "7HP", "comment": "Factor VII activity levels are above the reference range in this pregnant patient, consistent with physiologic increase in factor VII during pregnancy (PMID 20174768)."}, {"code": "13U", "comment": "The factor XIII screening assay is normal.  However, the screening assay detects only severe deficiencies, and may remain above baseline 1-3 months after transfusion."}, {"code": "13C", "comment": "Factor XIII antigen is low, which can be due to liver dysfunction, consumption (disseminated intravascular coagulation, ECMO, surgery, or thrombosis, inflammatory bowel diseases, medications such as valproate and tocilizumab, or other conditions. Factor XIII levels are usually 20-70% or higher in these conditions.  Hereditary deficiency is very rare.  A prior urea clot-based assay was normal, which helps to rule out severe congenital FXIII deficiency."}, {"code": "13A", "comment": "The FXIII antigen is normal.   A prior urea clot-based assay was normal, which helps to rule out severe congenital FXIII deficiency."}, {"code": "11L", "comment": "Factor XI is decreased.   Acquired decreases in factor XI can arise secondary to proteinuria (such as in nephrotic syndrome) or pregnancy, or can also be an artifact from a lupus anticoagulant.  Alternatively, this level could be consistent with a hereditary factor XI deficiency. Hereditary factor XI deficiencies are most common in individuals of Ashkenazi Jewish descent.  Individuals with hereditary deficiency might have a bleeding tendency, particularly if there is a positive personal or family history of bleeding.  Many hereditary factor XI deficiencies are also asymptomatic.  If bleeding is present, it is often mild.  If indicated, the factor XI can be repeated on a fresh specimen to determine if the level is reproducible.  This level of factor XI may or may not prolong the PTT, depending on the sensitivity of the PTT reagent."}, {"code": "12L", "comment": "Factor XII is below the reference range.  Factor XII deficiencies do not cause an increased risk for bleeding and do not require treatment."}, {"code": "11L2", "comment": "Factor XI is markedly decreased.  Acquired decreases in factor XI can arise secondary to proteinuria (such as in nephrotic syndrome) or pregnancy, or can also be an artifact from a lupusanticoagulant.  Alternatively, this level is consistent with a hereditary factor XI deficiency.  Factor XI deficiencies are most common in individuals of Ashkenazi Jewish descent. This level of factor XI deficiency is likely to have an increased risk of bleeding, particularly if there is a positive personal or family history of bleeding.  If clinically indicated, it is suggested to repeat the factor XI level to confirm the presence of an abnormality. Taken together, this patient has a prolonged PTT on the basis of a decreased level of factor XI."}, {"code": "1112L", "comment": "The PTT is prolonged at *** seconds.  To evaluate the prolonged PTT, a lupus anticoagulant assay and PTT-related factor assays were performed.  The lupus anticoagulant assay was negative.  PTT-related factor assays reveal decreased factors XI and XII, which accounts for the PTT prolongation.  Factor XII deficiencies do not cause an increased risk for bleeding and do not require treatment.  The combination of low values for factors XI and XII is associated with loss of these factors in the urine (proteinuria).  Thus a urinalysis for urine protein may be informative.  Hereditary factor XII deficiencies are relatively common, and hereditary factor XI deficiencies are common among persons of Ashkenazi Jewish descent.  Therefore, the presence of two hereditary deficiencies may also be considered if relevant."}, {"code": "13N", "comment": "The factor XIII screening assay is normal.  However, the screening assay detects only severe deficiencies. The FXIII antigen, which is more sensitive to quantitative deficiency, is also normal.  Note that exogenous provision of factor XIII via transfusion of plasma-containing products within the past 1-3 months can obscure detection of underlying deficiency."}, {"code": "1A", "comment": "1. The PT and PTT are normal."}, {"code": "1B", "comment": "1. The PT and PTT are prolonged. Common causes of combined PT and PTT prolongations like this include warfarin, liver dysfunction, vitamin K deficiency, or (if clinically suspected) disseminated intravascular coagulation (DIC).  However, if the patient is not on warfarin and the PT and PTT prolongations are persistent and unexplained, a prolonged PT/PTT panel can be performed on this specimen by request."}, {"code": "1C", "comment": "1. The PT is prolonged and the PTT is normal. Common causes of PT prolongations include warfarin, liver dysfunction, vitamin K deficiency, or (if clinically suspected) disseminated intravascular coagulation (DIC).  However, if the patient is not on warfarin and the PT prolongation is persistent and unexplained, a prolonged PT panel can be performed on this specimen by request. Note that the PT reagent contains a heparin neutralizer, so heparin does not cause an elevated PT."}, {"code": "1D", "comment": "1. The PTT is prolonged.  Neither heparin nor a lupus anticoagulant are detected.  If requested, PTT factor assays can be performed on this specimen to identify the cause of the prolonged PTT. The PT is normal."}, {"code": "1E", "comment": "1. This patient has a prolonged PT and PTT. The patient is known to have been receiving {bivalirudin; warfarin; argatroban} and the PT prolongation is consistent with that anticoagulation therapy."}, {"code": "1F", "comment": "Causes of PTT prolongations include treatment with heparin and/or warfarin, liver dysfunction, lupus anticoagulants, factor deficiency, or (if clinically suspected) disseminated intravascular coagulation (DIC). Clinical correlation advised."}, {"code": "1H1", "comment": "1. The specimen submitted has an elevated PTT. An Anti-Xa assay detects an anticoagulant, presumably  {heparin; UFH; LMWH} at  *** IU/mL. When the sample was treated with an enzyme that degrades heparin (Hepzyme), the PTT corrected into the normal range, indicating that the PTT prolongation is due to the presence of heparin in the sample."}, {"code": "1H2", "comment": "1. The specimen submitted has an elevated PTT. An Anti-Xa assay detects an anticoagulant, presumably {heparin; UFH; LMWH} at  *** IU/mL.  When the sample was treated with an enzyme that degrades heparin, the PTT failed to full correct into the normal range, indicating that the PTT prolongation is likely multifactorial and related to heparin in addition to other etiologies (e.g., a lupus anticoagulant, liver dysfunction and/or consumptive processes such as disseminated intravascular coagulation (DIC)."}, {"code": "1L", "comment": "1. This patient has abnormal liver function tests. The PT is elevated at *** seconds, and the PTT is elevated at *** seconds. Fibrinogen is *** mg/dl. Factor VIII was found to be *** %.  These results are most consistent withdecreased synthesis of coagulation factors by the liver. In patients with liver disease, the factor VIII level can be normal or increased because factor VIII is synthesized in endothelial cells, not hepatocytes. DIC cannot be ruled out in this setting if DIC is suspected clinically."}, {"code": "1S", "comment": "1. The PTT is shortened. This can be seen in an acute phase reaction due to elevated factor VIII and/or fibrinogen or could represent a specimen artifact. If the patient is on emicizumab (Hemlibra), it should be noted that this can also cause a shortened PTT. The PT is normal."}, {"code": "2S", "comment": "The PT is shortened.  Slightly shortened PT is of unclear clinical significance and could reflect a testing or sample handling artifact, elevated factor VII levels, or other causes. The PTT is normal."}, {"code": "DXA", "comment": "An Anti-Xa assay detects an anticoagulant, presumably {apixaban; rivaroxaban} at *** IU/mL. {apixaban; rivaroxaban}  exposure can prolong the PT and, to a lesser extent, the PTT. PT and PTT can also be normal despite {apixaban; rivaroxaban}."}, {"code": "ECMOHEP", "comment": "The PT and PTT are prolonged in this acutely ill patient on ECMO and heparin."}, {"code": "FACINH", "comment": "The corrects {PT;PTT} in a mixing study at T0 *** sec, but is prolonged at T120 *** sec. These results are most commonly seen with a factor {V;VIII} inhibitor."}, {"code": "FD", "comment": "Given the findings below, the PTT is likely to be prolonged due to a combination of lupus anticoagulant and factor deficiency {VIII/IX,X,XI,XIII}."}, {"code": "FDLA", "comment": "The PTT is likely prolonged due to a lupus anticoagulant in this specimen."}, {"code": "LA", "comment": "Given the findings below, the PTT is likely to be prolonged due to factor deficiency {VIII/IX,X,XI,XIII}."}, {"code": "PTMC", "comment": "The PT corrected in a mixing study, which is consistent with factor deficiency (see below)*"}, {"code": "PTLUP", "comment": "Occasionally, lupus anticoagulants can prolong the PT by decreasing factor II or by artifactually interfering with the PT assay."}, {"code": "PTND", "comment": "The PT mix was credited because the PT was not prolonged 3 seconds from the normal range."}, {"code": "PTTDEF", "comment": "The PTT corrects in a mixing study at T0 *** sec and does not substantially change at T120 min *** sec, consistent with factor deficiency."}, {"code": "PTTINH", "comment": "The PTT fails to correct with a mixing study at T0 and T120.  This is most consistent with a factor inhibitor (see below)"}, {"code": "MIXLA", "comment": "The PTT does not correct in a mixing study at T0 *** sec and increases slightly at T120 *** sec.  This is most consistent with a non-specific inhibitor, such as lupus, although it does not rule out a specific factor inhibitor."}, {"code": "PTTND", "comment": "The PTT mix was credited because the PTT was not prolonged 5 seconds from the normal range."}, {"code": "RTS", "comment": "The reptilase time is essentially normal, in that it is not prolonged.  Rarely, dysfibrinogenemia can have shortened reptilase times."}, {"code": "TTL", "comment": "The thrombin time is prolonged.  This is not due to heparin because the thrombin time remains prolonged after treating the specimen with an enzyme that degrades heparin.  Fibrinogen is *** mg/dl.  If the purpose of the study was to assess for dysfibrinogenemia, the thrombin time can be repeated any time when the FDP is normal.  If the purpose of the study was part of a DIC screen, the thrombin time prolongations of DIC are typically attributed to the positive FDP and/or low fibrinogen."}, {"code": "TTS", "comment": "The thrombin time is essentially normal, in that it is not prolonged.  Rarely, dysfibrinogenemia can have shortened thrombin times."}, {"code": "XA", "comment": "An Anti-Xa assay detects an anticoagulant, presumably {apixaban; rivaroxaban,heparin} *** at  IU/mL."}, {"code": "NOX", "comment": "An anti-Xa assay is negative for Xa-inhibiting anticoagulants."}, {"code": "DABOK", "comment": "The dilute thrombin time is prolonged, suggesting therapeutic dabigatran.  The time of the last dose prior to specimen collection can be helpful to further determine if the dabigatran level is appropriate, but the overall range from trough to peak is estimated at 49-131 seconds."}, {"code": "DABHI", "comment": "The dilute thrombin time is prolonged, suggesting possible SUPRAtherapeutic dabigatran.  This can occur with renal dysfunction, or if heparin has contaminated the specimen (eg. from a line or during the blood draw)."}, {"code": "DABLO", "comment": "The dilute thrombin time is prolonged, suggesting possible SUBtherapeutic dabigatran.  If this specimen was not drawn at the peak (approximately 2 hours after a dose), consider repeating the test on a specimen that is collected 2 hours after a dose."}, {"code": "ARGOK", "comment": "The dilute thrombin time is prolonged, consistent with the patient's reported argatroban therapy.  The results suggest a therapeutic level of argatroban."}, {"code": "ARGHI", "comment": "The dilute thrombin time is prolonged, suggesting possible SUPRAtherapeutic argatroban.  This can occur with liver dysfunction, or if heparin has contaminated the specimen (eg. from a line or during the blood draw)."}, {"code": "ARGLO", "comment": "The dilute thrombin time is prolonged, suggesting possible SUBtherapeutic argatroban."}, {"code": "N2", "comment": "Protein C, protein S, and antithrombin III activity are normal."}, {"code": "N3", "comment": "Protein C activity is normal. Protein S and antithrombin III activity could not be interpreted because of {apixaban; rivaroxaban} interference.  Free protein S and antithrombin III antigen are normal.  To exclude a type II protein S or antithrombin III deficiency, protein S and antithrombin activity assays can be performed any time when the patient is no longer on {apixaban; rivaroxaban}."}, {"code": "CSL", "comment": "Protein C and protein S are decreased. Deficiencies of proteins C and S may predispose patients to venous thrombosis. Decreased protein C and protein S may be due to vitamin K deficiency, warfarin use, liver disease, disseminated intravascular coagulation, or more rarely, congenital deficiency of protein C and/or protein S. Protein S may also be decreased in pregnancy or peripartum states, estrogen-based therapy, and inflammation. It is recommended that these studies be repeated outside the setting of acute thrombosis."}, {"code": "SAL", "comment": "Protein S and antithrombin III are low. This combination of findings can be caused by estrogen use, pregnancy, or disseminated intravascular coagulation (DIC). Alternatively, protein S can be decreased by warfarin or acute phase reactions, and antithrombin III can be decreased by heparin or proteinuria. Liver dysfunction, recent thrombosis or surgery can also decrease protein S and antithrombin III, but protein C would usually be decreased as well. If a hereditary antithrombin III or protein S deficiency is suspected, the assays may be repeated at a time when the patient has not received estrogen therapy (nor been pregnant) for at least 3 months, has not received warfarin for at least 20 days, has not received heparin for at least 1 to 2 weeks, and/or has recovered from any current illness."}, {"code": "CL", "comment": "Protein C is decreased. Causes of an isolated decrease in protein C include a hereditary deficiency, recent warfarin initiation, vitamin K deficiency, liver dysfunction or consumption during thrombosis, DIC or surgery. If clinically indicated, the protein C assay may be repeated any time when the patient is stable and has not received warfarin for at least 10 days."}, {"code": "SL1", "comment": "It is difficult to interpret this result without protein C and antithrombin III assays. If protein C and antithrombin III are also low, the possible etiologies would include liver dysfunction, thrombosis, major surgery, or DIC. If protein C is decreased and antithrombin III is normal, possible etiologies would include warfarin or vitamin K deficiency. If both are normal, possible etiologies would include an acute phase reaction, hereditary deficiency, or (in women) estrogen use or pregnancy."}, {"code": "SLO", "comment": "Protein S is low, but the patient is on estrogen, which can cause low protein S. If there is interest in excluding the possibility of an underlying hereditary deficiency, testing should be repeated any time after discontinuing estrogen for at least 3 months. Alternatively, first-degree family members may be tested if appropriate, as hereditary protein S deficiency has autosomal dominant inheritance."}, {"code": "SLPCOAG", "comment": "Protein S is low, but the patient is reportedly pregnant or post-partum. Protein S is normally decreased during pregnancy and for up to 3 months post-partum. Therefore, it is suggested to repeat the protein S level any time after 3 months post-partum."}, {"code": "SL4", "comment": "Protein S is decreased. Elevations in C4b-binding protein, which occur during an acute phase reaction, decrease protein S. The [elevated fibrinogen/FVIII] suggests inflammation, and therefore the decreased protein S may be atleast partially due to acute phase reaction (elevated C4b-binding protein). If the patient has not received warfarin or estrogen, a hereditary protein S deficiency is possible, particularly if the patient has a personal or family history of venous thrombosis. If a hereditary deficiency is suspected, the protein S assays may be repeated any time when the patient is stable, has a normal fibrinogen level, and has not received warfarin for at least 20 days. If indicated, measuring protein S in first-degree family members or any relative with a history of venous thrombosis may be informative, because hereditary protein S deficiency has autosomal dominant inheritance."}, {"code": "PEGA", "comment": "The ATIII activity is {normal; decreased; elevated}. This patient may have been evaluated for the level of antithrombin III because of treatment with L-asparaginase, which is known to decrease antithrombin III levels. Some guidelines suggest repletion of ATIII when levels drop to 50-70% (PMID: 31999063)."}, {"code": "LAH", "comment": "Antithrombin III is slightly low. Heparin administration can cause slight decreases in antithrombin III within several days secondary to increased clearance. If hereditary antithrombin III deficiency is suspected, the assay may be repeated once the patient has been off heparin for at least 1 to 2 weeks."}, {"code": "BIVAL", "comment": "The dilute thrombin time was *** seconds.  The therapeutic range on bivalirudin is not well-known but may be approximately 48-130 seconds (a more conservative range would be 60-90 seconds).  In patients with a lupus anticoagulant, the therapeutic range might be 58-140 seconds (a more conservative range might be 70-100)."}, {"code": "PTN", "comment": "The PT is normal."}, {"code": "PTTN", "comment": "The PTT is normal."}, {"code": "FN", "comment": "The fibrinogen is normal."}, {"code": "FH", "comment": "The fibrinogen is elevated at ***.  Fibrinogen becomes elevated during acute phase reactions."}, {"code": "FHV", "comment": "The fibrinogen is elevated at ***.  Fibrinogen becomes elevated during acute phase reactions.  The VWF reported in this specimen may be somewhat higher than baseline due to an acute phase reaction."}, {"code": "MFA", "comment": "In patients receiving Altuviiio, the true factor VIII level is underestimated by our clot-based assays and overestimated by chromogenic assays; however, exact correction values have shown variability in clinical practice and are currently not well defined."}];
+
+// ------------------------- TAGGING (FIXED) ---------------------------
+
+const ANALYTES_ORDER = [
+  "PT","PTT","INR","Hepzyme","Anti-Xa","Protein C","Protein S","Antithrombin",
+  "APC resistance","FVL","Prothrombin G20210A","PTT-LA","DRVVT",
+  "Cardiolipin","Beta-2 GP1","Mixing study","Heparin","Warfarin","DOAC",
+  "Factor VII","Factor VIII","Factor IX","Factor X","Factor XI","Factor XII","Factor XIII",
+  "Fibrinogen","VWF","FVIII"
+];
+
+// Use regex with word boundaries so "pt" does NOT match "patient"
+const ANALYTE_REGEX = {
+  "PT": [/\bprothrombin\s+time\b/i, /\bpt\b/i],
+  "PTT": [/\b(a)?ptt\b/i, /\bactivated\s+partial\s+thromboplastin\s+time\b/i],
+  "INR": [/\binr\b/i],
+
+  "Hepzyme": [/\bhepzyme\b/i, /\bheparinase\b/i, /\bheparin\s+neutralization\b/i],
+  "Anti-Xa": [/\banti[-\s]?xa\b/i, /\banti\s*factor\s*xa\b/i, /\banti-?10-?a\b/i],
+
+  "Protein C": [/\bprotein\s+c\b/i],
+  "Protein S": [/\bprotein\s+s\b/i],
+  "Antithrombin": [/\bantithrombin\b/i, /\bat\s*iii\b/i, /\bantithrombin\s*3\b/i, /\bat\s*3\b/i],
+
+  "APC resistance": [/\bactivated\s+protein\s+c\s+resistance\b/i, /\bapc\s+resistance\b/i],
+  "FVL": [/\bfactor\s+v\s+leiden\b/i, /\bfvl\b/i],
+  "Prothrombin G20210A": [/\bg20210a\b/i, /\bprothrombin\s+gene\b/i],
+
+  "PTT-LA": [/\bptt-?la\b/i, /\blupus\s+anticoagulant\b/i],
+  "DRVVT": [/\bdr-?vvt\b/i, /\bdrvvt\b/i],
+
+  "Cardiolipin": [/\bcardiolipin\b/i],
+  "Beta-2 GP1": [/\bbeta[-\s]?2\b/i, /\bglycoprotein\b/i, /\bb2gp\b/i, /β2/i],
+
+  "Mixing study": [/\bmixing\s+study\b/i, /\bmixing\s+studies\b/i],
+  "Heparin": [/\bheparin\b/i],
+  "Warfarin": [/\bwarfarin\b/i, /\bcoumadin\b/i],
+  "DOAC": [
+    /\bapixaban\b/i, /\brivaroxaban\b/i, /\bedoxaban\b/i, /\bdabigatran\b/i,
+    /\beliquis\b/i, /\bxarelto\b/i, /\bpradaxa\b/i, /\bsavaysa\b/i,
+    /\bdoac\b/i, /\bdirect\s+oral\s+anticoagulant\b/i
+  ],
+  
+  "Factor VII": [/\bfactor\s*vii\b/i, /\bfactor\s*7\b/i, /\bfvii\b/i],
+  "Factor VIII": [/\bfactor\s*viii\b/i, /\bfactor\s*8\b/i, /\bfviii\b/i],
+  "FVIII": [/\bfactor\s*viii\b/i, /\bfactor\s*8\b/i, /\bfviii\b/i],
+  "Factor IX": [/\bfactor\s*ix\b/i, /\bfactor\s*9\b/i, /\bfix\b/i],
+  "Factor X": [/\bfactor\s*x\b/i, /\bfactor\s*10\b/i, /\bfx\b/i],
+  "Factor XI": [/\bfactor\s*xi\b/i, /\bfactor\s*11\b/i, /\bfxi\b/i],
+  "Factor XII": [/\bfactor\s*xii\b/i, /\bfactor\s*12\b/i, /\bfxii\b/i],
+  "Factor XIII": [/\bfactor\s*xiii\b/i, /\bfactor\s*13\b/i, /\bfxiii\b/i],
+  "Fibrinogen": [/\bfibrinogen\b/i],
+  "VWF": [/\bvon\s+willebrand\b/i, /\bvwf\b/i, /\bvon\s+willebrand\s+factor\b/i],
+};
+
+const STATUS = {
+  uninterpretable: /\b(uninterpretable|invalid|cannot\s+be\s+interpreted|unable\s+to\s+interpret|interference)\b/i,
+  pending: /\b(pending|preliminary|preliminarily)\b/i,
+  shortened: /\b(shortened|short)\b/i,
+  prolonged: /\b(prolonged|prolongation)\b/i,
+  high: /\b(elevated|high|increased|above)\b/i,
+  low: /\b(low|decreased|reduced|below)\b/i,
+  normal: /\b(normal|within\s+(the\s+)?reference)\b/i,
+  negative: /\bnegative\b/i,
+  positive: /\bpositive\b/i
+};
+
+const CATEGORIES = [
+  ["Coag screening (PT / PTT / INR)", ["pt and ptt","prothrombin time"," inr","ptt"," pt "]],
+  ["Lupus anticoagulant (PTT-LA / dRVVT)", ["ptt-la","lupus anticoagulant","drvvt","dr-vvt"]],
+  ["Antiphospholipid antibodies (aCL / β2GP1)", ["cardiolipin","glycoprotein","antiphospholipid","beta-2","b2gp"]],
+  ["Protein C / S / Antithrombin", ["protein c","protein s","antithrombin","atiii","at 3"]],
+  ["Genetic thrombophilia (FVL / Prothrombin G20210A)", ["factor v leiden","fvl","g20210a","prothrombin gene","apc resistance"]],
+  ["Anticoagulant interference (heparin / DOAC / warfarin)", ["hepzyme","heparin","apixaban","rivaroxaban","doac","coumadin","warfarin","anti-xa"]],
+  ["Mixing study / inhibitor evaluation", ["mixing study","inhibitor","correction","incubation"]],
+];
+
+function categorize(comment) {
+  const t = (comment || "").toLowerCase();
+  let best = "Other", bestScore = 0;
+  for (const [cat, kws] of CATEGORIES) {
+    let s = 0;
+    for (const kw of kws) if (t.includes(kw)) s++;
+    if (s > bestScore) { bestScore = s; best = cat; }
+  }
+  return bestScore > 0 ? best : "Other";
+}
+
+function detectStatus(comment, analyte) {
+  if (!comment) return null;
+  const regs = ANALYTE_REGEX[analyte] || [];
+  if (!regs.length) return null;
+  const mentioned = regs.some(r => r.test(comment));
+  if (!mentioned) return null;
+
+  const text = comment;
+
+  // Find context around the analyte mention for better detection
+  let context = "";
+  for (const reg of regs) {
+    const match = text.match(reg);
+    if (match && match.index !== undefined) {
+      const start = Math.max(0, match.index - 100);
+      const end = Math.min(text.length, match.index + match[0].length + 100);
+      context = text.substring(start, end);
+      break;
+    }
+  }
+  if (!context) context = text;
+
+  // Check for uninterpretable first
+  if (STATUS.uninterpretable.test(context)) return "uninterpretable";
+  if (STATUS.pending.test(context)) return "pending";
+
+  // Directionality for PT/PTT/INR
+  if (analyte === "PTT" && STATUS.shortened.test(context)) return "low";
+  if ((analyte === "PTT" || analyte === "PT" || analyte === "INR") && STATUS.prolonged.test(context)) return "high";
+
+  // Genetics - positive/negative
+  if (["FVL","Prothrombin G20210A","APC resistance"].includes(analyte)) {
+    if (STATUS.high.test(context)) return "high";
+    if (STATUS.negative.test(context) || STATUS.normal.test(context)) return "normal";
+  }
+
+  // For proteins and factors, check for status words near the mention
+  const proteinFactors = ["Protein C","Protein S","Antithrombin","Factor VII","Factor VIII","FVIII","Factor IX","Factor X","Factor XI","Factor XII","Factor XIII","Fibrinogen","VWF"];
+  if (proteinFactors.includes(analyte)) {
+    if (STATUS.low.test(context) || /\b(decreased|below|reduced|deficiency)\b/i.test(context)) return "low";
+    if (STATUS.high.test(context) || /\b(above|elevated|increased)\b/i.test(context)) return "high";
+    if (STATUS.normal.test(context) || /\b(within|normal)\b/i.test(context)) return "normal";
+  }
+
+  // General status detection
+  if (STATUS.high.test(context)) return "high";
+  if (STATUS.low.test(context)) return "low";
+  if (STATUS.normal.test(context) || STATUS.negative.test(context)) return "normal";
+
+  return "mentioned";
+}
+
+function buildTags(comment) {
+  const tags = {};
+  for (const a of ANALYTES_ORDER) {
+    const st = detectStatus(comment, a);
+    if (st) {
+      // Avoid duplicates: prefer "Factor VIII" over "FVIII"
+      if (a === "FVIII" && tags["Factor VIII"]) continue;
+      tags[a] = st;
+    }
+  }
+  return tags;
+}
+
+function activeAnticoagTag(rec) {
+  const tags = rec.tags || {};
+  if (tags["Heparin"]) return "Heparin";
+  if (tags["DOAC"]) return "DOAC";
+  if (tags["Warfarin"]) return "Warfarin";
+  return null;
+}
+
+// Build enriched dataset once.
+const DATA = RAW.map(r => {
+  const comment = r.comment || "";
+  return {
+    code: (r.code || "").trim(),
+    comment,
+    category: categorize(comment),
+    tags: buildTags(comment),
+  };
+});
+
+// Code lookup map for quick access
+const CODE_MAP = new Map();
+for (const rec of DATA) {
+  CODE_MAP.set(rec.code.toUpperCase(), rec.comment);
+}
+
+// ------------------------------ UI -----------------------------------
+
+const STATUS_ORDER = ["any","normal","high","low","uninterpretable","pending","mentioned"];
+const STATUS_LABEL = {
+  any: "Any",
+  normal: "Normal / Negative",
+  high: "High / Prolonged / Positive",
+  low: "Low / Decreased / Shortened",
+  uninterpretable: "Uninterpretable / Interference",
+  pending: "Pending / Preliminary",
+  mentioned: "Mentioned"
+};
+
+function el(id) { return document.getElementById(id); }
+
+function buildSelect(selectEl) {
+  selectEl.innerHTML = "";
+  for (const opt of STATUS_ORDER) {
+    const o = document.createElement("option");
+    o.value = opt;
+    o.textContent = STATUS_LABEL[opt] ?? opt;
+    selectEl.appendChild(o);
+  }
+}
+
+function tokenize(s) {
+  return (s || "").toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+function scoreRecord(rec, qTokens) {
+  if (!qTokens.length) return 0;
+  const hay = (rec.code + " " + rec.category + " " + rec.comment).toLowerCase();
+  let score = 0;
+  for (const t of qTokens) if (hay.includes(t)) score += 1;
+  if (qTokens.length && rec.code.toLowerCase().startsWith(qTokens[0])) score += 2;
+  return score;
+}
+
+let state = { q: "", category: "ALL", sort: "relevance" };
+
+function setActiveCategory(cat) {
+  state.category = cat;
+  const buttons = el("catTree").querySelectorAll("button");
+  buttons.forEach(b => b.classList.toggle("active", b.dataset.cat === cat));
+}
+
+function resetState() {
+  state = { q: "", category: "ALL", sort: "relevance" };
+  el("q").value = "";
+  el("sort").value = "relevance";
+  setActiveCategory("ALL");
+  render();
+}
+
+function matchesStatus(rec, analyte, wanted) {
+  if (wanted === "any") return true;
+  return (rec.tags || {})[analyte] === wanted;
+}
+
+function matchesAnticoag(rec, wanted) {
+  if (wanted === "any") return true;
+  const t = activeAnticoagTag(rec);
+  if (wanted === "anyAC") return !!t;
+  return t === wanted;
+}
+
+function filterData() {
+  const q = el("q").value.trim();
+  const qTokens = tokenize(q);
+  let arr = DATA.slice();
+
+  if (state.category !== "ALL") arr = arr.filter(r => r.category === state.category);
+
+  if (qTokens.length) {
+    arr = arr.map(r => ({...r, _score: scoreRecord(r, qTokens)})).filter(r => r._score > 0);
+  } else {
+    arr = arr.map(r => ({...r, _score: 0}));
+  }
+
+  const sort = el("sort").value;
+  if (sort === "code") arr.sort((a,b) => a.code.localeCompare(b.code));
+  else if (sort === "category") arr.sort((a,b) => (a.category + a.code).localeCompare(b.category + b.code));
+  else arr.sort((a,b) => (b._score - a._score) || a.code.localeCompare(b.code));
+
+  return {arr, q};
+}
+
+async function copyToClipboard(text) {
+  try { await navigator.clipboard.writeText(text); } catch (e) {}
+}
+
+function chipClass(v) {
+  if (!v) return "";
+  return v;
+}
+
+function chipText(k,v) {
+  const map = { normal:"normal", high:"high", low:"low", pending:"pending", uninterpretable:"uninterp", mentioned:"mention" };
+  return `${k}:${map[v] ?? v}`;
+}
+
+function renderCards(records) {
+  const wrap = el("cards");
+  wrap.innerHTML = "";
+
+  for (const rec of records) {
+    const d = document.createElement("details");
+    d.className = "card";
+
+    const s = document.createElement("summary");
+
+    const left = document.createElement("div");
+    left.className = "left";
+
+    const code = document.createElement("div");
+    code.className = "code";
+    code.textContent = rec.code;
+
+    const cat = document.createElement("div");
+    cat.className = "cat";
+    cat.textContent = rec.category;
+
+    left.appendChild(code);
+    left.appendChild(cat);
+
+    const chips = document.createElement("div");
+    chips.className = "chips";
+
+    const keys = Object.keys(rec.tags || {}).sort((a,b)=>a.localeCompare(b));
+    const priority = ["PT","PTT","INR","PTT-LA","DRVVT","Protein C","Protein S","Antithrombin","Anti-Xa","Warfarin","DOAC","Heparin","Hepzyme","Factor VII","Factor VIII","FVIII","Factor IX","Factor X","Factor XI","Factor XII","Factor XIII","Fibrinogen","VWF"];
+    const ordered = [...new Set([...priority.filter(p=>keys.includes(p)), ...keys])];
+
+    for (const k of ordered.slice(0, 15)) {
+      const v = rec.tags[k];
+      const c = document.createElement("span");
+      c.className = "chip " + chipClass(v);
+      c.textContent = chipText(k,v);
+      chips.appendChild(c);
+    }
+
+    const right = document.createElement("div");
+    right.style.display = "flex";
+    right.style.gap = "8px";
+    right.style.alignItems = "center";
+    right.style.flexWrap = "wrap";
+    right.style.justifyContent = "flex-end";
+
+    const addBtn = document.createElement("button");
+    addBtn.className = "btn";
+    addBtn.textContent = "+";
+    addBtn.title = "Add code to comment builder";
+    addBtn.style.minWidth = "32px";
+    addBtn.style.padding = "8px 10px";
+    addBtn.addEventListener("click", (ev) => {
+      ev.preventDefault(); ev.stopPropagation();
+      addCodeToBuilder(rec.code);
+    });
+
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "btn";
+    copyBtn.textContent = "Copy code";
+    copyBtn.addEventListener("click", (ev) => {
+      ev.preventDefault(); ev.stopPropagation();
+      copyToClipboard(rec.code);
+      copyBtn.textContent = "Copied";
+      setTimeout(()=>copyBtn.textContent="Copy code", 900);
+    });
+
+    right.appendChild(chips);
+    right.appendChild(addBtn);
+    right.appendChild(copyBtn);
+
+    s.appendChild(left);
+    s.appendChild(right);
+
+    const body = document.createElement("div");
+    body.className = "body";
+    const pre = document.createElement("pre");
+    pre.textContent = rec.comment || "";
+    body.appendChild(pre);
+
+    d.appendChild(s);
+    d.appendChild(body);
+    wrap.appendChild(d);
+  }
+
+  if (!records.length) {
+    const empty = document.createElement("div");
+    empty.style.color = "var(--muted)";
+    empty.style.padding = "8px 2px";
+    empty.textContent = "No matches. Try a different search term or select a different category.";
+    wrap.appendChild(empty);
+  }
+}
+
+function renderCategories() {
+  const tree = el("catTree");
+  tree.innerHTML = "";
+
+  const counts = new Map();
+  for (const r of DATA) counts.set(r.category, (counts.get(r.category) || 0) + 1);
+
+  const cats = Array.from(counts.keys()).sort((a,b)=>counts.get(b)-counts.get(a) || a.localeCompare(b));
+
+  const addBtn = (cat,label,count) => {
+    const b = document.createElement("button");
+    b.dataset.cat = cat;
+    b.innerHTML = `<span>${label}</span><span class="count">${count}</span>`;
+    b.addEventListener("click", ()=>{ setActiveCategory(cat); render(); });
+    tree.appendChild(b);
+  };
+
+  addBtn("ALL","All categories", DATA.length);
+  for (const c of cats) addBtn(c,c,counts.get(c));
+  setActiveCategory(state.category);
+}
+
+function render() {
+  const {arr, q} = filterData();
+
+  el("totalCount").textContent = `${DATA.length} codes`;
+  el("resultCount").textContent = `${arr.length} shown`;
+
+  const active = [];
+  if (state.category !== "ALL") active.push(`Category=${state.category}`);
+  if (q) active.push(`Search="${q}"`);
+  el("metaLine").textContent = active.length ? active.join("  •  ") : "No filters (showing everything).";
+
+  renderCards(arr);
+}
+
+// ------------------------- COMMENT BUILDER ---------------------------
+
+function expandCodeInText(text, cursorPos) {
+  // Find the word before the cursor
+  const beforeCursor = text.substring(0, cursorPos);
+  const afterCursor = text.substring(cursorPos);
+  
+  // Match the last word (code) before cursor, allowing alphanumeric and common code characters
+  const match = beforeCursor.match(/([A-Za-z0-9]+)$/);
+  if (!match) return null;
+  
+  const code = match[1].toUpperCase();
+  const comment = CODE_MAP.get(code);
+  
+  if (!comment) return null;
+  
+  // Replace the code with the comment
+  const beforeCode = beforeCursor.substring(0, match.index);
+  const newText = beforeCode + comment + afterCursor;
+  const newCursorPos = beforeCode.length + comment.length;
+  
+  return { text: newText, cursorPos: newCursorPos };
+}
+
+function addCodeToBuilder(code) {
+  const textarea = el("commentBuilder");
+  const currentText = textarea.value;
+  const cursorPos = textarea.selectionStart;
+  
+  // Add code on a new line if there's existing text
+  const prefix = currentText && !currentText.endsWith('\n') && currentText.length > 0 ? '\n' : '';
+  const newText = currentText.substring(0, cursorPos) + prefix + code + currentText.substring(cursorPos);
+  const newCursorPos = cursorPos + prefix.length + code.length;
+  
+  textarea.value = newText;
+  textarea.setSelectionRange(newCursorPos, newCursorPos);
+  textarea.focus();
+}
+
+function init() {
+  el("q").addEventListener("input", () => {
+    clearTimeout(window.__t);
+    window.__t = setTimeout(render, 120);
+  });
+
+  el("sort").addEventListener("change", render);
+  el("resetBtn").addEventListener("click", resetState);
+
+  // Comment builder: expand codes on F8
+  const commentBuilder = el("commentBuilder");
+  commentBuilder.addEventListener("keydown", (ev) => {
+    if (ev.key === 'F8' || ev.code === 'F8') {
+      ev.preventDefault();
+      const textarea = ev.target;
+      const cursorPos = textarea.selectionStart;
+      const result = expandCodeInText(textarea.value, cursorPos);
+      
+      if (result) {
+        textarea.value = result.text;
+        textarea.setSelectionRange(result.cursorPos, result.cursorPos);
+      }
+    }
+  });
+
+  renderCategories();
+  render();
+}
+
+init();
+</script>
+</body>
+</html>
