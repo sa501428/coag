@@ -95,6 +95,52 @@
     .toolbar { display:flex; gap: 8px; align-items:center; }
     .pill { font-size: 12px; color: var(--muted); }
     .hint { font-size: 12px; color: var(--muted); padding-top: 6px; }
+    #commentBuilder:empty:before {
+      content: attr(data-placeholder);
+      color: #999;
+      pointer-events: none;
+    }
+    .smart-select {
+      display: inline-block;
+      padding: 2px 8px;
+      margin: 0 2px;
+      border: 1px solid #4a90e2;
+      border-radius: 4px;
+      background: #e8f4fd;
+      color: #1a5490;
+      cursor: pointer;
+      font-size: inherit;
+      font-family: inherit;
+      vertical-align: baseline;
+      box-sizing: border-box;
+    }
+    .smart-select:focus {
+      outline: 2px solid #4a90e2;
+      outline-offset: 1px;
+      background: #d0e8fc;
+    }
+    .smart-select:hover {
+      background: #d0e8fc;
+    }
+    .smart-input {
+      display: inline-block;
+      padding: 2px 6px;
+      margin: 0 2px;
+      border: 1px solid #f59e0b;
+      border-radius: 4px;
+      background: #fff3cd;
+      color: #856404;
+      font-size: inherit;
+      font-family: inherit;
+      width: 60px;
+      text-align: center;
+      vertical-align: baseline;
+    }
+    .smart-input:focus {
+      outline: 2px solid #f59e0b;
+      outline-offset: 1px;
+      background: #ffecb3;
+    }
     @media (max-width: 980px) {
       .layout { grid-template-columns: 1fr; }
       .search { width: 100%; max-width: none; }
@@ -114,6 +160,20 @@
     </div>
   </div>
 </header>
+
+<section class="panel" aria-label="Comment Builder" style="max-width: 100%; margin: 18px;">
+  <div class="hd"><h2>Comment Builder</h2></div>
+  <div class="bd">
+    <div class="row">
+      <label class="pill">Type codes and press F8 to expand, or click + on codes to add</label>
+      <div id="commentBuilder" contenteditable="true" style="width: 100%; min-height: 200px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); font-family: var(--sans); background: #fff; white-space: pre-wrap; word-wrap: break-word;" data-placeholder="Type codes here (e.g., N1 L1 D1) and press F8 to expand them to full comments..."></div>
+      <div style="margin-top: 8px; display: flex; gap: 8px;">
+        <button class="btn" id="getResolvedText" style="font-size: 12px;">Get Resolved Text</button>
+        <button class="btn" id="clearBuilder" style="font-size: 12px;">Clear</button>
+      </div>
+    </div>
+  </div>
+</section>
 
 <main class="layout">
   <section class="panel" aria-label="Filters">
@@ -146,16 +206,6 @@
     <div class="results">
       <div class="meta" id="metaLine"></div>
       <div class="cards" id="cards"></div>
-    </div>
-  </section>
-
-  <section class="panel" aria-label="Comment Builder">
-    <div class="hd"><h2>Comment Builder</h2></div>
-    <div class="bd">
-      <div class="row">
-        <label class="pill">Type codes and press F8 to expand, or click + on codes to add</label>
-        <textarea id="commentBuilder" rows="10" style="width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); font-family: var(--sans); resize: vertical;" placeholder="Type codes here (e.g., N1 L1 D1) and press F8 to expand them to full comments..."></textarea>
-      </div>
     </div>
   </section>
 </main>
@@ -574,45 +624,313 @@ function render() {
 
 // ------------------------- COMMENT BUILDER ---------------------------
 
-function expandCodeInText(text, cursorPos) {
-  // Find the word before the cursor
-  const beforeCursor = text.substring(0, cursorPos);
-  const afterCursor = text.substring(cursorPos);
+// Parse smart text and convert to HTML with interactive elements
+function parseSmartText(text) {
+  if (!text) return '';
   
-  // Match the last word (code) before cursor, allowing alphanumeric and common code characters
+  let html = '';
+  let i = 0;
+  let smartIdCounter = 0;
+  
+  while (i < text.length) {
+    // Check for curly brace smart list {option1; option2; option3}
+    if (text[i] === '{' && i + 1 < text.length) {
+      const braceEnd = text.indexOf('}', i);
+      if (braceEnd !== -1) {
+        const braceContent = text.substring(i + 1, braceEnd);
+        const options = braceContent.split(';').map(opt => opt.trim()).filter(opt => opt);
+        
+        if (options.length > 0) {
+          const smartId = 'smart_' + (smartIdCounter++);
+          // Calculate width based on longest option (rough estimate: ~8px per character)
+          const longestOption = options.reduce((a, b) => a.length > b.length ? a : b);
+          const estimatedWidth = Math.max(80, longestOption.length * 8 + 30); // min 80px, add padding
+          html += `<select class="smart-select" data-smart-id="${smartId}" data-original="{${braceContent}}" style="width: ${estimatedWidth}px;">`;
+          options.forEach(opt => {
+            html += `<option value="${opt.replace(/"/g, '&quot;')}">${opt}</option>`;
+          });
+          html += '</select>';
+          i = braceEnd + 1;
+          continue;
+        }
+      }
+    }
+    
+    // Check for *** placeholder
+    if (text.substring(i, i + 3) === '***') {
+      const smartId = 'smart_' + (smartIdCounter++);
+      // Check for units after *** (common patterns: "*** %", "*** seconds", "*** mg/dl", etc.)
+      let unit = '';
+      let j = i + 3;
+      // Skip spaces
+      while (j < text.length && text[j] === ' ') j++;
+      // Capture unit (alphanumeric, %, /, etc.)
+      const unitStart = j;
+      while (j < text.length && /[a-zA-Z0-9%\/]/.test(text[j])) {
+        unit += text[j];
+        j++;
+      }
+      html += `<input type="text" class="smart-input" data-smart-id="${smartId}" data-original="***" data-unit="${unit}" placeholder="***" style="width: ${unit ? '90px' : '60px'}">`;
+      if (unit) html += `<span style="margin-left: 2px; color: var(--muted);">${unit}</span>`;
+      i = j;
+      continue;
+    }
+    
+    // Regular character - escape HTML
+    if (text[i] === '<') html += '&lt;';
+    else if (text[i] === '>') html += '&gt;';
+    else if (text[i] === '&') html += '&amp;';
+    else if (text[i] === '\n') html += '<br>';
+    else html += text[i];
+    i++;
+  }
+  
+  return html;
+}
+
+// Get resolved text from contenteditable div (replaces smart elements with their values)
+function getResolvedText(builderEl) {
+  // Create a map of smart element IDs to their resolved values from the original
+  const valueMap = new Map();
+  
+  // Get values from original selects
+  builderEl.querySelectorAll('.smart-select').forEach(select => {
+    const smartId = select.dataset.smartId;
+    const selectedValue = select.options[select.selectedIndex]?.value || select.value || '';
+    valueMap.set(smartId, selectedValue);
+  });
+  
+  // Get values from original inputs
+  builderEl.querySelectorAll('.smart-input').forEach(input => {
+    const smartId = input.dataset.smartId;
+    const value = input.value.trim() || '***';
+    const unit = input.dataset.unit || '';
+    valueMap.set(smartId, { value, unit });
+  });
+  
+  // Now clone and replace using the value map
+  const clone = builderEl.cloneNode(true);
+  
+  // Replace smart selects with their selected values
+  clone.querySelectorAll('.smart-select').forEach(select => {
+    const smartId = select.dataset.smartId;
+    const resolvedValue = valueMap.get(smartId) || '';
+    const textNode = document.createTextNode(resolvedValue);
+    // Remove unit span if it exists
+    const nextSibling = select.nextSibling;
+    if (nextSibling && nextSibling.nodeType === 1 && nextSibling.tagName === 'SPAN') {
+      nextSibling.remove();
+    }
+    select.parentNode.replaceChild(textNode, select);
+  });
+  
+  // Replace smart inputs with their values (or *** if empty)
+  clone.querySelectorAll('.smart-input').forEach(input => {
+    const smartId = input.dataset.smartId;
+    const data = valueMap.get(smartId);
+    const value = (data && typeof data === 'object') ? data.value : (data || '***');
+    const unit = (data && typeof data === 'object') ? data.unit : '';
+    // Remove the unit span if it exists (next sibling)
+    const nextSibling = input.nextSibling;
+    if (nextSibling && nextSibling.nodeType === 1 && nextSibling.tagName === 'SPAN') {
+      nextSibling.remove();
+    }
+    const textNode = document.createTextNode(value + (unit && value !== '***' ? ' ' + unit : ''));
+    input.parentNode.replaceChild(textNode, input);
+  });
+  
+  // Convert <br> tags to newlines before extracting text
+  clone.querySelectorAll('br').forEach(br => {
+    br.parentNode.replaceChild(document.createTextNode('\n'), br);
+  });
+  
+  // Get text content - this will preserve newlines from text nodes
+  let text = '';
+  const walker = document.createTreeWalker(
+    clone,
+    NodeFilter.SHOW_TEXT,
+    null
+  );
+  
+  let node;
+  while (node = walker.nextNode()) {
+    text += node.textContent;
+  }
+  
+  // Normalize multiple spaces but preserve newlines
+  text = text.replace(/[ \t]+/g, ' ');
+  // Clean up excessive newlines (more than 2 consecutive) but keep single/double newlines
+  text = text.replace(/\n{3,}/g, '\n\n');
+  // Trim leading/trailing whitespace but preserve internal newlines
+  return text.replace(/^\s+|\s+$/g, '');
+}
+
+// Insert smart text HTML into contenteditable at cursor position
+function insertSmartTextAtCursor(builderEl, smartHtml) {
+  const selection = window.getSelection();
+  if (selection.rangeCount === 0) {
+    // No selection, append to end
+    const div = document.createElement('div');
+    div.innerHTML = smartHtml;
+    while (div.firstChild) {
+      builderEl.appendChild(div.firstChild);
+    }
+    return;
+  }
+  
+  const range = selection.getRangeAt(0);
+  range.deleteContents();
+  
+  const div = document.createElement('div');
+  div.innerHTML = smartHtml;
+  const frag = document.createDocumentFragment();
+  while (div.firstChild) {
+    frag.appendChild(div.firstChild);
+  }
+  
+  range.insertNode(frag);
+  range.collapse(false);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function expandCodeInText(builderEl) {
+  const selection = window.getSelection();
+  if (selection.rangeCount === 0) return;
+  
+  const range = selection.getRangeAt(0);
+  let textNode = range.startContainer;
+  let offset = range.startOffset;
+  
+  // If we're not in a text node, try to find one
+  if (textNode.nodeType !== Node.TEXT_NODE) {
+    // Try to find text node at cursor
+    if (textNode.nodeType === Node.ELEMENT_NODE) {
+      const walker = document.createTreeWalker(
+        textNode,
+        NodeFilter.SHOW_TEXT,
+        null
+      );
+      textNode = walker.nextNode();
+      if (!textNode) return;
+      offset = textNode.textContent.length;
+    } else {
+      return;
+    }
+  }
+  
+  const text = textNode.textContent;
+  
+  // Find the word before the cursor
+  const beforeCursor = text.substring(0, offset);
   const match = beforeCursor.match(/([A-Za-z0-9]+)$/);
-  if (!match) return null;
+  if (!match) return;
   
   const code = match[1].toUpperCase();
   const comment = CODE_MAP.get(code);
+  if (!comment) return;
   
-  if (!comment) return null;
+  // Parse the comment to smart HTML
+  const smartHtml = parseSmartText(comment);
   
-  // Replace the code with the comment
-  const beforeCode = beforeCursor.substring(0, match.index);
-  const newText = beforeCode + comment + afterCursor;
-  const newCursorPos = beforeCode.length + comment.length;
+  // Replace the code with smart HTML
+  const beforeCode = text.substring(0, match.index);
+  const afterCursor = text.substring(offset);
   
-  return { text: newText, cursorPos: newCursorPos };
+  // Create fragment with before text, smart HTML, and after text
+  const frag = document.createDocumentFragment();
+  
+  if (beforeCode) {
+    frag.appendChild(document.createTextNode(beforeCode));
+  }
+  
+  // Insert smart HTML
+  const div = document.createElement('div');
+  div.innerHTML = smartHtml;
+  while (div.firstChild) {
+    frag.appendChild(div.firstChild);
+  }
+  
+  if (afterCursor) {
+    frag.appendChild(document.createTextNode(afterCursor));
+  }
+  
+  // Replace the text node with the fragment
+  textNode.parentNode.replaceChild(frag, textNode);
+  
+  // Set cursor after inserted smart content (before afterCursor if it exists)
+  const newRange = document.createRange();
+  if (afterCursor) {
+    // Find the last text node in the fragment (the afterCursor text)
+    const walker = document.createTreeWalker(
+      frag,
+      NodeFilter.SHOW_TEXT,
+      null
+    );
+    let lastTextNode = null;
+    let node;
+    while (node = walker.nextNode()) {
+      lastTextNode = node;
+    }
+    if (lastTextNode) {
+      newRange.setStart(lastTextNode, 0);
+    } else {
+      newRange.setStartAfter(frag.lastChild || frag);
+    }
+  } else {
+    newRange.setStartAfter(frag.lastChild || frag);
+  }
+  newRange.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(newRange);
 }
 
 function addCodeToBuilder(code) {
-  const textarea = el("commentBuilder");
-  const currentText = textarea.value;
-  const cursorPos = textarea.selectionStart;
-  
-  // Get the comment for this code
+  const builderEl = el("commentBuilder");
   const comment = CODE_MAP.get(code.toUpperCase());
   
-  // Add comment on a new line if there's existing text
-  const prefix = currentText && !currentText.endsWith('\n') && currentText.length > 0 ? '\n' : '';
-  const textToAdd = comment || code; // Use comment if available, otherwise just the code
-  const newText = currentText.substring(0, cursorPos) + prefix + textToAdd + currentText.substring(cursorPos);
-  const newCursorPos = cursorPos + prefix.length + textToAdd.length;
+  if (!comment) {
+    // If no comment found, just add the code as text
+    const textNode = document.createTextNode(code + ' ');
+    builderEl.appendChild(textNode);
+    const range = document.createRange();
+    range.setStartAfter(textNode);
+    range.collapse(true);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    builderEl.focus();
+    return;
+  }
   
-  textarea.value = newText;
-  textarea.setSelectionRange(newCursorPos, newCursorPos);
-  textarea.focus();
+  // Parse comment to smart HTML
+  const smartHtml = parseSmartText(comment);
+  
+  // Add newline if there's existing content
+  if (builderEl.textContent.trim().length > 0) {
+    builderEl.appendChild(document.createElement('br'));
+  }
+  
+  // Insert smart HTML
+  const div = document.createElement('div');
+  div.innerHTML = smartHtml;
+  const frag = document.createDocumentFragment();
+  while (div.firstChild) {
+    frag.appendChild(div.firstChild);
+  }
+  builderEl.appendChild(frag);
+  
+  // Add a space after
+  builderEl.appendChild(document.createTextNode(' '));
+  
+  // Set cursor at end
+  const range = document.createRange();
+  range.selectNodeContents(builderEl);
+  range.collapse(false);
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+  builderEl.focus();
 }
 
 function init() {
@@ -629,15 +947,30 @@ function init() {
   commentBuilder.addEventListener("keydown", (ev) => {
     if (ev.key === 'F8' || ev.code === 'F8') {
       ev.preventDefault();
-      const textarea = ev.target;
-      const cursorPos = textarea.selectionStart;
-      const result = expandCodeInText(textarea.value, cursorPos);
-      
-      if (result) {
-        textarea.value = result.text;
-        textarea.setSelectionRange(result.cursorPos, result.cursorPos);
-      }
+      expandCodeInText(commentBuilder);
     }
+  });
+  
+  // Get resolved text button
+  el("getResolvedText").addEventListener("click", () => {
+    const resolved = getResolvedText(commentBuilder);
+    const textarea = document.createElement('textarea');
+    textarea.value = resolved;
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+    
+    const btn = el("getResolvedText");
+    const originalText = btn.textContent;
+    btn.textContent = "Copied!";
+    setTimeout(() => btn.textContent = originalText, 1000);
+  });
+  
+  // Clear builder button
+  el("clearBuilder").addEventListener("click", () => {
+    commentBuilder.innerHTML = '';
+    commentBuilder.focus();
   });
 
   renderCategories();
