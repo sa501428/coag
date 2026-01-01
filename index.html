@@ -232,7 +232,7 @@ const STATUS = {
 
 const CATEGORIES = [
   ["Coag screening (PT / PTT / INR)", ["pt and ptt","prothrombin time"," inr","ptt"," pt "]],
-  ["Lupus anticoagulant (PTT-LA / dRVVT)", ["ptt-la","lupus anticoagulant","drvvt","dr-vvt"]],
+  ["Lupus anticoagulant (PTT-LA / DRVVT)", ["ptt-la","lupus anticoagulant","drvvt","dr-vvt"]],
   ["Antiphospholipid antibodies (aCL / β2GP1)", ["cardiolipin","glycoprotein","antiphospholipid","beta-2","b2gp"]],
   ["Protein C / S / Antithrombin", ["protein c","protein s","antithrombin","atiii","at 3"]],
   ["Genetic thrombophilia (FVL / Prothrombin G20210A)", ["factor v leiden","fvl","g20210a","prothrombin gene","apc resistance"]],
@@ -601,10 +601,14 @@ function addCodeToBuilder(code) {
   const currentText = textarea.value;
   const cursorPos = textarea.selectionStart;
   
-  // Add code on a new line if there's existing text
+  // Get the comment for this code
+  const comment = CODE_MAP.get(code.toUpperCase());
+  
+  // Add comment on a new line if there's existing text
   const prefix = currentText && !currentText.endsWith('\n') && currentText.length > 0 ? '\n' : '';
-  const newText = currentText.substring(0, cursorPos) + prefix + code + currentText.substring(cursorPos);
-  const newCursorPos = cursorPos + prefix.length + code.length;
+  const textToAdd = comment || code; // Use comment if available, otherwise just the code
+  const newText = currentText.substring(0, cursorPos) + prefix + textToAdd + currentText.substring(cursorPos);
+  const newCursorPos = cursorPos + prefix.length + textToAdd.length;
   
   textarea.value = newText;
   textarea.setSelectionRange(newCursorPos, newCursorPos);

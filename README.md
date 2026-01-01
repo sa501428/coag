@@ -1,0 +1,91 @@
+# Coag Beaker Comment Browser
+
+A client-side web application for browsing and managing coagulation laboratory beaker comments. This tool allows you to search, filter, and build custom comments using ETX codes from a CSV dataset.
+
+## Features
+
+- **Search & Browse**: Search through codes and comments, or browse by category
+- **Category Filtering**: Filter results by coagulation test categories (PT/PTT, Lupus Anticoagulant, Protein C/S, etc.)
+- **Visual Status Tags**: Color-coded tags showing the status of various analytes (PT, PTT, Protein C, Protein S, Antithrombin, Factors, etc.)
+- **Comment Builder**: 
+  - Type codes manually and press **F8** to expand them to full comment text
+  - Click the **+** button on any code card to add it to the comment builder
+  - Build custom comment strings by combining multiple codes
+
+## Usage
+
+### Browsing Codes
+
+1. Use the **search bar** at the top to search for specific terms (e.g., "apixaban", "DRVVT", "Protein S low")
+2. Click on **categories** in the left sidebar to filter by test type
+3. Use the **sort dropdown** to sort results by relevance, code, or category
+
+### Using the Comment Builder
+
+1. **Manual Entry**: Type codes directly in the Comment Builder textarea (e.g., `N1`, `L1`, `D1`)
+2. **Expand Codes**: Position your cursor after a code and press **F8** to expand it to the full comment text
+3. **Add from Cards**: Click the **+** button on any code card to add that code to the builder
+4. **Build Comments**: Combine multiple codes and expanded text to create custom comment strings
+
+### Example Workflow
+
+```
+1. Type "N1" in the comment builder
+2. Press F8 → Expands to: "Protein C, protein S, and antithrombin III activity are normal."
+3. Click + on code "L1" → Adds "L1" to the builder
+4. Press F8 again → Expands "L1" to: "The PTT-LA lupus anticoagulant screen is negative."
+```
+
+## File Structure
+
+```
+coag/
+├── index.html          # Main application file (single HTML file with embedded CSS/JS)
+├── Useme_beaker_comments_coag.csv  # Source data file with codes and comments
+└── README.md           # This file
+```
+
+## Data Source
+
+The application uses codes and comments from `Useme_beaker_comments_coag.csv`. The CSV file contains:
+- **Code**: The ETX code identifier (e.g., "N1", "L1", "D1")
+- **Comment**: The full comment text associated with that code
+
+## Technical Details
+
+- **Pure Client-Side**: No server required - runs entirely in the browser
+- **No Dependencies**: Vanilla JavaScript, no external libraries
+- **LAMP Compatible**: Can be deployed on any LAMP server without server-side code
+
+## Browser Compatibility
+
+Works in all modern browsers that support:
+- ES6 JavaScript features
+- CSS Grid and Flexbox
+- Clipboard API (for copy functionality)
+
+## Keyboard Shortcuts
+
+- **F8**: Expand the code at cursor position to full comment text (in Comment Builder)
+
+## Status Tags
+
+The application automatically detects and displays colored status tags for:
+- **PT, PTT, INR**: Coagulation screening tests
+- **Protein C, Protein S, Antithrombin**: Natural anticoagulants
+- **PTT-LA, DRVVT**: Lupus anticoagulant tests
+- **Factor VII, VIII, IX, X, XI, XII, XIII**: Coagulation factors
+- **Fibrinogen, VWF**: Additional coagulation proteins
+- **Heparin, Warfarin, DOAC**: Anticoagulant medications
+
+Status indicators:
+- 🟢 **Normal**: Green
+- 🔴 **High/Prolonged/Positive**: Red
+- 🔵 **Low/Decreased**: Blue
+- 🟡 **Pending/Preliminary**: Yellow
+- ⚪ **Uninterpretable**: Gray
+
+## License
+
+This is a client-side application for internal use.
+
