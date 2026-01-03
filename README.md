@@ -1,6 +1,6 @@
 # Coag Beaker Comment Browser
 
-A client-side web application for browsing and managing coagulation laboratory beaker comments. This tool allows you to search, filter, and build custom comments using ETX codes from a CSV dataset.
+A client-side web application for browsing and managing coagulation laboratory beaker comments. This tool allows you to search, filter, and draft comments.
 
 ## Features
 
@@ -36,54 +36,11 @@ A client-side web application for browsing and managing coagulation laboratory b
 4. Press F8 again → Expands "L1" to: "The PTT-LA lupus anticoagulant screen is negative."
 ```
 
-## File Structure
-
-```
-coag/
-├── index.html          # Main application file (single HTML file with embedded CSS/JS)
-├── Useme_beaker_comments_coag.csv  # Source data file with codes and comments
-└── README.md           # This file
-```
-
-## Data Source
-
-The application uses codes and comments from `Useme_beaker_comments_coag.csv`. The CSV file contains:
-- **Code**: The ETX code identifier (e.g., "N1", "L1", "D1")
-- **Comment**: The full comment text associated with that code
-
 ## Technical Details
 
 - **Pure Client-Side**: No server required - runs entirely in the browser
 - **No Dependencies**: Vanilla JavaScript, no external libraries
 - **LAMP Compatible**: Can be deployed on any LAMP server without server-side code
-
-## Browser Compatibility
-
-Works in all modern browsers that support:
-- ES6 JavaScript features
-- CSS Grid and Flexbox
-- Clipboard API (for copy functionality)
-
-## Keyboard Shortcuts
-
-- **F8**: Expand the code at cursor position to full comment text (in Comment Builder)
-
-## Status Tags
-
-The application automatically detects and displays colored status tags for:
-- **PT, PTT, INR**: Coagulation screening tests
-- **Protein C, Protein S, Antithrombin**: Natural anticoagulants
-- **PTT-LA, DRVVT**: Lupus anticoagulant tests
-- **Factor VII, VIII, IX, X, XI, XII, XIII**: Coagulation factors
-- **Fibrinogen, VWF**: Additional coagulation proteins
-- **Heparin, Warfarin, DOAC**: Anticoagulant medications
-
-Status indicators:
-- 🟢 **Normal**: Green
-- 🔴 **High/Prolonged/Positive**: Red
-- 🔵 **Low/Decreased**: Blue
-- 🟡 **Pending/Preliminary**: Yellow
-- ⚪ **Uninterpretable**: Gray
 
 ## License
 

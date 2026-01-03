@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Coag Data Dashboard</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      padding: 20px;
+      background-color: #f5f5f5;
+      color: #333;
+    }
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+    h1 {
+      margin-bottom: 20px;
+      color: #2c3e50;
+    }
+    .main-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .input-section {
+      background: white;
+      border-radius: 10px;
+      padding: 15px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    #raw {
+      width: 100%;
+      height: 340px;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      font-family: ui-monospace, Menlo, Consolas, monospace;
+      font-size: 13px;
+      resize: vertical;
+    }
+    .controls {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    button {
+      padding: 8px 16px;
+      border: 1px solid #4a90e2;
+      background: #4a90e2;
+      color: white;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background 0.2s;
+    }
+    button:hover {
+      background: #357abd;
+    }
+    button:active {
+      background: #2a5f94;
+    }
+    #filter {
+      padding: 6px 10px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      font-size: 14px;
+      flex: 1;
+      min-width: 150px;
+    }
+    .panel-container {
+      margin-bottom: 12px;
+    }
+    .panel-header {
+      background: #4a90e2;
+      color: white;
+      padding: 12px 15px;
+      border-radius: 8px 8px 0 0;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-weight: 600;
+      user-select: none;
+    }
+    .panel-header:hover {
+      background: #357abd;
+    }
+    .panel-header.collapsed {
+      border-radius: 8px;
+    }
+    .panel-toggle {
+      font-size: 18px;
+      transition: transform 0.2s;
+    }
+    .panel-header.collapsed .panel-toggle {
+      transform: rotate(-90deg);
+    }
+    .panel-content {
+      background: white;
+      border: 1px solid #ddd;
+      border-top: none;
+      border-radius: 0 0 8px 8px;
+      padding: 15px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .panel-header.collapsed + .panel-content {
+      display: none;
+    }
+    #kpis {
+      margin-top: 10px;
+      font-family: ui-monospace, Menlo, Consolas, monospace;
+      font-size: 13px;
+      color: #555;
+      padding: 10px;
+      background: #f8f9fa;
+      border-radius: 6px;
+    }
+    #legend {
+      margin-top: 10px;
+      color: #666;
+      font-size: 12px;
+      padding: 10px;
+      background: #f8f9fa;
+      border-radius: 6px;
+      line-height: 1.6;
+    }
+    .table-container {
+      background: white;
+      border-radius: 10px;
+      padding: 15px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      overflow-x: auto;
+    }
+    #tbl {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+    }
+    #tbl thead {
+      background: #f8f9fa;
+    }
+    #tbl th {
+      text-align: left;
+      border-bottom: 2px solid #ddd;
+      padding: 10px;
+      font-weight: 600;
+      color: #2c3e50;
+    }
+    #tbl td {
+      border-bottom: 1px solid #f2f2f2;
+      padding: 10px;
+      vertical-align: top;
+    }
+    #tbl tbody tr:hover {
+      background: #f8f9fa;
+    }
+    .mono {
+      font-family: ui-monospace, Menlo, Consolas, monospace;
+    }
+    .override-inputs {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .override-inputs input {
+      padding: 6px;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      font-size: 13px;
+    }
+    .override-buttons {
+      display: flex;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .override-buttons button {
+      padding: 4px 12px;
+      font-size: 12px;
+    }
+    .override-buttons button[data-act="clear"] {
+      background: #e74c3c;
+      border-color: #e74c3c;
+    }
+    .override-buttons button[data-act="clear"]:hover {
+      background: #c0392b;
+    }
+    .flag-high {
+      color: #e74c3c;
+      font-weight: 600;
+    }
+    .flag-low {
+      color: #3498db;
+      font-weight: 600;
+    }
+    .flag-alert {
+      color: #f39c12;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Coag Data Dashboard</h1>
+    
+    <div class="main-grid">
+      <div class="input-section">
+        <textarea id="raw" placeholder="Paste coag data here..."></textarea>
+        <div class="controls">
+          <button id="btnParse">Parse</button>
+          <input id="filter" type="text" placeholder="Filter test name..." />
+        </div>
+      </div>
+    </div>
+
+    <div id="legend" style="margin-bottom: 12px; padding: 10px; background: #f8f9fa; border-radius: 6px; color: #666; font-size: 12px; line-height: 1.6;"></div>
+
+    <div id="panels-container"></div>
+  </div>
+
+  <script>
+    // ===== PARSER FUNCTIONS =====
+    
+    function parseCoagText(input) {
+      const text = (input || "").replace(/\r\n/g, "\n").trim();
+      const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+
+      const tsRe = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})\s+(\d{1,2}):(\d{2})$/; // M/D/YY HH:mm
+      const kvRe = /^([^:]+):\s*(.+)$/;
+
+      const panels = [];
+      let current = null;
+
+      // Capture legend lines like "(H): Data is abnormally high"
+      const legend = {};
+
+      for (const line of lines) {
+        const ts = line.match(tsRe);
+        if (ts) {
+          if (current) panels.push(current);
+          const [_, mm, dd, yy, hh, min] = ts;
+
+          const year = yy.length === 2 ? (Number(yy) + 2000) : Number(yy);
+          const month = String(mm).padStart(2, "0");
+          const day = String(dd).padStart(2, "0");
+          const hour = String(hh).padStart(2, "0");
+          const minute = String(min).padStart(2, "0");
+
+          current = {
+            datetimeRaw: line,
+            datetimeISO: `${year}-${month}-${day}T${hour}:${minute}:00`,
+            results: []
+          };
+          continue;
+        }
+
+        // Legend lines
+        // Examples:
+        // (H): Data is abnormally high
+        // Rpt: View report in Results Review for more information
+        const legendMatch = line.match(/^(?:\((H|L)\)|(!)|Rpt)\s*:\s*(.+)$/i);
+        if (legendMatch) {
+          const key = legendMatch[1] || legendMatch[2] || "Rpt";
+          legend[key] = legendMatch[3];
+          continue;
+        }
+
+        // Must have a timestamp before results; ignore junk above it
+        if (!current) continue;
+
+        const kv = line.match(kvRe);
+        if (!kv) {
+          // Non key-value line; could be continuation text — attach to last result if present
+          const last = current.results[current.results.length - 1];
+          if (last) {
+            last.text = (last.text ? last.text + " " : "") + line;
+          }
+          continue;
+        }
+
+        const name = kv[1].trim();
+        const rawValue = kv[2].trim();
+
+        // Skip PT-INR
+        if (name.toUpperCase().includes("PT-INR")) {
+          continue;
+        }
+
+        current.results.push(parseResultLine(name, rawValue));
+      }
+
+      if (current) panels.push(current);
+
+      return { panels, legend };
+    }
+
+    function parseResultLine(name, rawValue) {
+      // Split multiple values: "Not Detected  |  Detected"
+      const parts = rawValue.split(/\s*\|\s*/g).map(s => s.trim()).filter(Boolean);
+
+      // Flags (H)/(L) anywhere, markers like trailing "!"
+      const flags = new Set();
+      const markers = new Set();
+
+      const cleanedParts = parts.map(p => {
+        // capture (H)/(L)
+        p = p.replace(/\((H|L)\)/g, (_, f) => { flags.add(f); return ""; }).trim();
+
+        // capture "Rpt" token (whole or with punctuation)
+        // Examples: "Rpt", "Rpt !"
+        p = p.replace(/\bRpt\b/gi, () => { markers.add("Rpt"); return "Rpt"; });
+
+        // capture "!" marker
+        if (/[!]+$/.test(p) || /\s!/.test(p)) markers.add("!");
+        p = p.replace(/!/g, "").trim();
+
+        return p;
+      });
+
+      // Try to extract numeric(s) from each part:
+      // - "<9.4"  => store raw "<9.4", num 9.4, op "<"
+      // - "1.2"   => num 1.2
+      // - "Negative for..." => no numeric, store as text
+      const values = [];
+      let text = null;
+
+      for (const p of cleanedParts) {
+        const m = p.match(/^([<>]=?)?\s*([-+]?\d+(\.\d+)?)/);
+        if (m) {
+          const op = m[1] || null;
+          const num = Number(m[2]);
+          values.push({ raw: p, num, op });
+        } else {
+          // Not numeric; treat as text (keep full string)
+          // If there are multiple text parts, join them with " | "
+          text = text ? `${text} | ${p}` : p;
+        }
+      }
+
+      const isAbnormal = flags.size > 0 || markers.has("!") || markers.has("Rpt");
+
+      return {
+        name,
+        rawValue,
+        values,
+        flags: [...flags],
+        markers: [...markers].filter(m => m !== "Rpt"), // keep Rpt separately in isReport
+        isReport: markers.has("Rpt"),
+        isAbnormal,
+        text
+      };
+    }
+
+    // ===== STATUS CALCULATION FUNCTIONS =====
+
+    function calculateStatus(result) {
+      const name = result.name.toUpperCase();
+      const flags = result.flags || [];
+      const hasH = flags.includes("H");
+      const hasL = flags.includes("L");
+      const rawValue = result.rawValue.toUpperCase();
+      const values = result.values || [];
+      const text = (result.text || "").toUpperCase();
+
+      // If value contains "Rpt", set to INVALID if available, otherwise leave unset
+      if (result.isReport || rawValue.includes("RPT") || text.includes("RPT")) {
+        // Check if this test type supports INVALID status
+        if (name.includes("DRVVT") || (name.includes("LUPUS") && name.includes("ANTICOAGULANT")) ||
+            (name.includes("ANTI-XA") && name.includes("SCREEN")) ||
+            name.includes("PROTEIN S") || name.includes("AT3") || name.includes("ANTITHROMBIN")) {
+          return "INVALID";
+        }
+        // For other test types, leave unset (return null)
+        return null;
+      }
+
+      // PT and PTT: (H) = PROLONGED, (L) = SHORTENED, neither = NORMAL
+      if (name.includes("PT") && !name.includes("PT-INR") && !name.includes("HEPARIN")) {
+        if (hasH) return "PROLONGED";
+        if (hasL) return "SHORTENED";
+        return "NORMAL";
+      }
+      if (name.includes("PTT") && !name.includes("HEPARIN")) {
+        if (hasH) return "PROLONGED";
+        if (hasL) return "SHORTENED";
+        return "NORMAL";
+      }
+
+      // Cardiolipin and glycoprotein antibodies: <20 = NEGATIVE, 20-40 = MODERATE, >40 = ELEVATED
+      if (name.includes("CARDIOLIPIN") || name.includes("GLYCOPROTEIN")) {
+        // Get the numeric value (handle <9.4, 34.3, etc.)
+        if (values.length > 0) {
+          const val = values[0];
+          // If there's a < operator, the value is definitely less than the number
+          if (val.op === "<" || val.op === "<=") {
+            // If the number itself is < 20, then the value is definitely < 20
+            if (val.num < 20) return "NEGATIVE";
+            // If the number is >= 20, we can't be certain, but it's at least < that number
+            // For simplicity, if it's < 20, it's NEGATIVE; otherwise we can't determine
+            return null; // Can't determine for < values where num >= 20
+          } else {
+            // Regular numeric comparison
+            if (val.num < 20) return "NEGATIVE";
+            if (val.num >= 20 && val.num <= 40) return "MODERATE";
+            if (val.num > 40) return "ELEVATED";
+          }
+        }
+      }
+
+      // DRVVT screen and test: positive, negative, or invalid
+      if (name.includes("DRVVT")) {
+        const combined = (rawValue + " " + text).toUpperCase();
+        
+        // Check for invalid/uninterpretable first
+        if (combined.includes("UNINTERPRETABLE") || combined.includes("INVALID") || 
+            combined.includes("UNINTERPRETABLE")) {
+          return "INVALID";
+        }
+        
+        // Check for positive (including "preliminary positive")
+        if (combined.includes("POSITIVE") || combined.includes("PRELIMINARY POSITIVE")) {
+          return "POSITIVE";
+        }
+        
+        // Check for negative
+        if (combined.includes("NEGATIVE")) {
+          return "NEGATIVE";
+        }
+        
+        // Default to negative if not clear
+        return "NEGATIVE";
+      }
+
+      // Lupus anticoagulant (screen): positive, negative, or invalid
+      if (name.includes("LUPUS") && name.includes("ANTICOAGULANT")) {
+        const combined = (rawValue + " " + text).toUpperCase();
+        
+        // Check for invalid/uninterpretable first
+        if (combined.includes("UNINTERPRETABLE") || combined.includes("INVALID")) {
+          return "INVALID";
+        }
+        
+        // Check for positive (including "preliminary positive")
+        if (combined.includes("POSITIVE") || combined.includes("PRELIMINARY POSITIVE") || 
+            combined.includes("PRELIMARY POSITIVE")) {
+          return "POSITIVE";
+        }
+        
+        // Check for negative
+        if (combined.includes("NEGATIVE")) {
+          return "NEGATIVE";
+        }
+        
+        // Default to negative if not clear
+        return "NEGATIVE";
+      }
+
+      // Protein C, S, and AT3: normal, high, or low
+      if (name.includes("PROTEIN C") || name.includes("PROTEIN S") || 
+          name.includes("AT3") || name.includes("ANTITHROMBIN")) {
+        const combined = (rawValue + " " + text).toUpperCase();
+        const isProteinSOrAT3 = name.includes("PROTEIN S") || name.includes("AT3") || name.includes("ANTITHROMBIN");
+        
+        // If value contains "See Comment" or "Rpt"
+        if (combined.includes("SEE COMMENT") || result.isReport || rawValue.includes("RPT") || text.includes("RPT")) {
+          // Protein S and AT3 support INVALID, Protein C does not
+          if (isProteinSOrAT3) {
+            return "INVALID";
+          }
+          // Protein C leaves unset for manual override
+          return null;
+        }
+        if (hasH) return "HIGH";
+        if (hasL) return "LOW";
+        return "NORMAL";
+      }
+
+      // Act Protein C Resistance (confirm): positive or negative (when high (H) is positive)
+      if (name.includes("PROTEIN C RESISTANCE")) {
+        if (hasH) return "POSITIVE";
+        return "NEGATIVE";
+      }
+
+      // PT with Heparin Neutralization: POSITIVE vs NEGATIVE
+      if (name.includes("PT") && name.includes("HEPARIN")) {
+        if (rawValue.includes("POSITIVE") || text.includes("POSITIVE")) {
+          return "POSITIVE";
+        }
+        return "NEGATIVE";
+      }
+
+      // G20210A Gene mutation: NEGATIVE, POSITIVE, or PENDING
+      if (name.includes("G20210A") || name.includes("GENE MUTATION")) {
+        const combined = (rawValue + " " + text).toUpperCase();
+        if (combined.includes("POSITIVE")) {
+          return "POSITIVE";
+        }
+        if (combined.includes("NEGATIVE")) {
+          return "NEGATIVE";
+        }
+        // Default to PENDING if not clear
+        return "PENDING";
+      }
+
+      // Anti-Xa Screen: DETECTED, NOT DETECTED, or INVALID
+      if (name.includes("ANTI-XA") && name.includes("SCREEN")) {
+        const combined = (rawValue + " " + text).toUpperCase();
+
+        // Check for not detected
+        if (combined.includes("NOT DETECTED")) {
+          return "NOT DETECTED";
+        }
+        
+        // Check for detected
+        if (combined.includes("DETECTED")) {
+          return "DETECTED";
+        }
+        
+        // Default to NOT DETECTED if not clear
+        return "INVALID";
+      }
+
+      return null; // No special status calculation
+    }
+
+    function getStatusOptions(testName) {
+      const name = testName.toUpperCase();
+      
+      if ((name.includes("PT") && !name.includes("PT-INR") && !name.includes("HEPARIN")) || 
+          (name.includes("PTT") && !name.includes("HEPARIN"))) {
+        return ["NORMAL", "PROLONGED", "SHORTENED"];
+      }
+      
+      if (name.includes("CARDIOLIPIN") || name.includes("GLYCOPROTEIN")) {
+        return ["NEGATIVE", "MODERATE", "ELEVATED"];
+      }
+      
+      if (name.includes("DRVVT")) {
+        return ["POSITIVE", "NEGATIVE", "INVALID"];
+      }
+      
+      if (name.includes("LUPUS") && name.includes("ANTICOAGULANT")) {
+        return ["POSITIVE", "NEGATIVE", "INVALID"];
+      }
+      
+      if (name.includes("PROTEIN C")) {
+        return ["NORMAL", "HIGH", "LOW"];
+      }
+      
+      if (name.includes("PROTEIN S") || name.includes("AT3") || name.includes("ANTITHROMBIN")) {
+        return ["NORMAL", "HIGH", "LOW", "INVALID"];
+      }
+      
+      if (name.includes("PROTEIN C RESISTANCE")) {
+        return ["POSITIVE", "NEGATIVE"];
+      }
+      
+      if (name.includes("PT") && name.includes("HEPARIN")) {
+        return ["POSITIVE", "NEGATIVE"];
+      }
+      
+      if (name.includes("G20210A") || name.includes("GENE MUTATION")) {
+        return ["NEGATIVE", "POSITIVE", "PENDING"];
+      }
+      
+      if (name.includes("ANTI-XA") && name.includes("SCREEN")) {
+        return ["DETECTED", "NOT DETECTED", "INVALID"];
+      }
+      
+      return null;
+    }
+
+    // ===== UI FUNCTIONS =====
+
+    const $ = (id) => document.getElementById(id);
+
+    let parsed = null;
+
+    // Simple override store: key = datetimeISO + "||" + testName
+    function loadOverrides() {
+      try { return JSON.parse(localStorage.getItem("coagOverrides") || "{}"); }
+      catch { return {}; }
+    }
+    function saveOverrides(map) {
+      localStorage.setItem("coagOverrides", JSON.stringify(map));
+    }
+
+    // Deleted items store: array of keys
+    function loadDeleted() {
+      try { return JSON.parse(localStorage.getItem("coagDeleted") || "[]"); }
+      catch { return []; }
+    }
+    function saveDeleted(array) {
+      localStorage.setItem("coagDeleted", JSON.stringify(array));
+    }
+    function isDeleted(key) {
+      return loadDeleted().includes(key);
+    }
+    function deleteResult(key) {
+      const deleted = loadDeleted();
+      if (!deleted.includes(key)) {
+        deleted.push(key);
+        saveDeleted(deleted);
+      }
+    }
+    function restoreResult(key) {
+      const deleted = loadDeleted();
+      const index = deleted.indexOf(key);
+      if (index > -1) {
+        deleted.splice(index, 1);
+        saveDeleted(deleted);
+      }
+    }
+
+    function render() {
+      if (!parsed || !parsed.panels.length) {
+        $("legend").textContent = "";
+        $("panels-container").innerHTML = "";
+        return;
+      }
+
+      // Legend
+      const leg = parsed.legend || {};
+      const parts = Object.entries(leg).map(([k,v]) => `${k}: ${v}`);
+      $("legend").textContent = parts.length ? parts.join(" • ") : "";
+
+      // Render combined panel
+      renderPanels();
+    }
+
+    function combineDuplicateTests(results) {
+      // Group results by test name
+      const grouped = {};
+      
+      results.forEach((result) => {
+        const name = result.name;
+        if (!grouped[name]) {
+          grouped[name] = [];
+        }
+        grouped[name].push(result);
+      });
+      
+      // Combine entries for all duplicate test names
+      const combinedResults = [];
+      
+      Object.keys(grouped).forEach((name) => {
+        const entries = grouped[name];
+        const nameUpper = name.toUpperCase();
+        
+        // Combine all duplicate test names (any test that appears more than once)
+        if (entries.length > 1) {
+          // Combine multiple entries into one
+          const combined = {
+            name: name,
+            rawValue: entries.map(e => e.rawValue).join(", "),
+            values: [],
+            flags: [],
+            markers: [],
+            isReport: false,
+            isAbnormal: false,
+            text: null,
+            panelDatetime: entries.map(e => e.panelDatetime).join(", "),
+            panelDatetimeISO: entries[0].panelDatetimeISO, // Use first timestamp for key
+            allEntries: entries // Keep reference to all entries for override handling
+          };
+          
+          // Combine all values
+          entries.forEach(e => {
+            if (e.values && e.values.length > 0) {
+              combined.values.push(...e.values);
+            }
+            if (e.text) {
+              combined.text = combined.text ? `${combined.text}, ${e.text}` : e.text;
+            }
+          });
+          
+          // Combine flags and markers
+          const allFlags = new Set();
+          const allMarkers = new Set();
+          entries.forEach(e => {
+            if (e.flags) e.flags.forEach(f => allFlags.add(f));
+            if (e.markers) e.markers.forEach(m => allMarkers.add(m));
+            if (e.isReport) allMarkers.add("Rpt");
+            if (e.isAbnormal) combined.isAbnormal = true;
+          });
+          combined.flags = [...allFlags];
+          combined.markers = [...allMarkers];
+          combined.isReport = allMarkers.has("Rpt");
+          
+          // Calculate combined status based on test type
+          const statuses = entries.map(e => calculateStatus(e)).filter(s => s !== null);
+          if (statuses.length > 0) {
+            // Special handling for different test types
+            if (nameUpper.includes("ANTI-XA") && nameUpper.includes("SCREEN")) {
+              // Anti-Xa Screen: DETECTED overrides NOT DETECTED
+              if (statuses.includes("DETECTED")) {
+                combined._combinedStatus = "DETECTED";
+              } else if (statuses.includes("INVALID")) {
+                combined._combinedStatus = "INVALID";
+              } else {
+                combined._combinedStatus = "NOT DETECTED";
+              }
+            } else if ((nameUpper.includes("PT") && !nameUpper.includes("PT-INR") && !nameUpper.includes("HEPARIN") && !nameUpper.includes("PROTEIN")) ||
+                       (nameUpper.includes("PTT") && !nameUpper.includes("HEPARIN"))) {
+              // PT/PTT: PROLONGED/SHORTENED overrides NORMAL
+              if (statuses.includes("PROLONGED")) {
+                combined._combinedStatus = "PROLONGED";
+              } else if (statuses.includes("SHORTENED")) {
+                combined._combinedStatus = "SHORTENED";
+              } else if (statuses.every(s => s === "NORMAL")) {
+                combined._combinedStatus = "NORMAL";
+              } else {
+                combined._combinedStatus = statuses.find(s => s !== "NORMAL") || statuses[0];
+              }
+            } else {
+              // General case: use first non-null status, or first status if all same
+              // For most tests, if all statuses are the same, use that; otherwise use first
+              const uniqueStatuses = [...new Set(statuses)];
+              if (uniqueStatuses.length === 1) {
+                combined._combinedStatus = uniqueStatuses[0];
+              } else {
+                // Mixed statuses - use first one (could be enhanced with priority logic)
+                combined._combinedStatus = statuses[0];
+              }
+            }
+          }
+          
+          combinedResults.push(combined);
+        } else {
+          // Don't combine, just add entries as-is
+          entries.forEach(e => combinedResults.push(e));
+        }
+      });
+      
+      return combinedResults;
+    }
+
+    function renderPanels() {
+      const container = $("panels-container");
+      container.innerHTML = "";
+
+      const filter = ($("filter").value || "").toLowerCase();
+      const overrides = loadOverrides();
+
+      // Combine all results from all panels into one array
+      const allResults = [];
+      parsed.panels.forEach((panel) => {
+        panel.results.forEach((result) => {
+          allResults.push({
+            ...result,
+            panelDatetime: panel.datetimeRaw,
+            panelDatetimeISO: panel.datetimeISO
+          });
+        });
+      });
+
+      // Combine duplicate tests (PT, PT (POC), PTT)
+      const combinedResults = combineDuplicateTests(allResults);
+
+      // Create single table
+      const tableDiv = document.createElement("div");
+      tableDiv.style.background = "white";
+      tableDiv.style.borderRadius = "8px";
+      tableDiv.style.padding = "10px";
+      tableDiv.style.boxShadow = "0 2px 4px rgba(0,0,0,0.1)";
+      tableDiv.style.overflowX = "auto";
+
+      const table = document.createElement("table");
+      table.style.width = "100%";
+      table.style.borderCollapse = "collapse";
+      table.innerHTML = `
+        <thead>
+          <tr>
+            <th style="text-align:left; border-bottom:2px solid #ddd; padding:6px 8px; background:#f8f9fa; font-weight:600; color:#2c3e50; font-size:13px;">Test</th>
+            <th style="text-align:left; border-bottom:2px solid #ddd; padding:6px 8px; background:#f8f9fa; font-weight:600; color:#2c3e50; font-size:13px;">Value</th>
+            <th style="text-align:left; border-bottom:2px solid #ddd; padding:6px 8px; background:#f8f9fa; font-weight:600; color:#2c3e50; font-size:13px;">Flags</th>
+            <th style="text-align:left; border-bottom:2px solid #ddd; padding:6px 8px; background:#f8f9fa; font-weight:600; color:#2c3e50; font-size:13px;">Status</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      `;
+
+      const tbody = table.querySelector("tbody");
+
+      // Filter out deleted items
+      const deleted = loadDeleted();
+      const rows = combinedResults.filter(r => {
+        const key = r.allEntries ? r.name : `${r.panelDatetimeISO}||${r.name}`;
+        return !deleted.includes(key) && (!filter || r.name.toLowerCase().includes(filter));
+      });
+
+        if (rows.length === 0) {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `<td colspan="4" style="text-align:center; padding:12px; color:#999; font-size:13px;">No results match the current filters.</td>`;
+          tbody.appendChild(tr);
+        } else {
+          for (const r of rows) {
+            const tr = document.createElement("tr");
+            tr.style.borderBottom = "1px solid #f2f2f2";
+            tr.style.fontSize = "13px";
+
+            // For combined entries, use just the test name as key; otherwise use timestamp||name
+            const key = r.allEntries ? r.name : `${r.panelDatetimeISO}||${r.name}`;
+            const ov = overrides[key] || null;
+
+            const flagsText = [
+              ...(r.flags || []).map(f => `(${f})`),
+              r.isReport ? "Rpt" : "",
+              ...(r.markers || []).map(m => m)
+            ].filter(Boolean).join(" ");
+
+            // Concatenate multiple values with comma
+            let displayValue;
+            if (r.values && r.values.length > 1) {
+              displayValue = r.values.map(v => v.raw).join(", ");
+            } else if (r.values && r.values.length === 1) {
+              displayValue = r.values[0].raw;
+            } else if (r.text) {
+              displayValue = r.text.replace(/\s*\|\s*/g, ", ");
+            } else {
+              displayValue = r.rawValue.replace(/\s*\|\s*/g, ", ");
+            }
+
+            // Calculate status - use combined status if available, otherwise calculate normally
+            const calculatedStatus = r._combinedStatus || calculateStatus(r);
+            const statusOverride = ov?.status;
+            const displayStatus = statusOverride || calculatedStatus || "";
+
+            // Get status options for dropdown
+            const statusOptions = getStatusOptions(r.name);
+
+            // Style flags
+            let flagsHtml = escapeHtml(flagsText);
+            flagsHtml = flagsHtml.replace(/\(H\)/g, '<span class="flag-high">(H)</span>');
+            flagsHtml = flagsHtml.replace(/\(L\)/g, '<span class="flag-low">(L)</span>');
+            flagsHtml = flagsHtml.replace(/!/g, '<span class="flag-alert">!</span>');
+            flagsHtml = flagsHtml.replace(/Rpt/g, '<span class="flag-alert">Rpt</span>');
+
+            // Build status display and dropdown
+            let statusDisplay = displayStatus || "—";
+            let statusDropdownHtml = "";
+            if (statusOptions) {
+              let optionsHtml = '<option value="">-- Auto --</option>';
+              statusOptions.forEach(opt => {
+                const selected = displayStatus === opt ? 'selected' : '';
+                optionsHtml += `<option value="${escapeAttr(opt)}" ${selected}>${escapeHtml(opt)}</option>`;
+              });
+              statusDropdownHtml = `<select data-k="${escapeAttr(key)}" data-f="status" style="width:calc(100% - 28px); padding:4px 6px; border:1px solid #ccc; border-radius:4px; font-size:12px; margin-right:4px;">${optionsHtml}</select>`;
+            } else {
+              statusDropdownHtml = `<span style="color:#999; font-size:12px;">${escapeHtml(statusDisplay)}</span>`;
+            }
+
+            tr.innerHTML = `
+              <td style="padding:6px 8px; font-size:13px;">${escapeHtml(r.name)}</td>
+              <td style="padding:6px 8px; font-size:12px;" class="mono">${escapeHtml(displayValue)}</td>
+              <td style="padding:6px 8px; font-size:12px;">${flagsHtml}</td>
+              <td style="padding:6px 8px;">
+                <div style="display:flex; align-items:center; gap:4px;">
+                  ${statusDropdownHtml}
+                  <button data-k="${escapeAttr(key)}" data-act="delete" style="padding:2px 6px; border:1px solid #e74c3c; background:#e74c3c; color:white; border-radius:3px; cursor:pointer; font-size:14px; line-height:1; white-space:nowrap; transition:background 0.2s;" onmouseover="this.style.background='#c0392b'" onmouseout="this.style.background='#e74c3c'" title="Delete this result">×</button>
+                </div>
+              </td>
+            `;
+            tbody.appendChild(tr);
+          }
+        }
+
+      // Handle status dropdown changes
+      tbody.onchange = (e) => {
+        const select = e.target.closest("select[data-f='status']");
+        if (!select) return;
+        const key = select.getAttribute("data-k");
+        const overrides = loadOverrides();
+        const status = select.value.trim() || "";
+        
+        if (!status) {
+          delete overrides[key];
+        } else {
+          overrides[key] = { status, updatedAt: new Date().toISOString() };
+        }
+        saveOverrides(overrides);
+        renderPanels();
+      };
+
+      // Handle delete button clicks
+      tbody.onclick = (e) => {
+        const btn = e.target.closest("button[data-act='delete']");
+        if (!btn) return;
+        if (confirm("Delete this result?")) {
+          const key = btn.getAttribute("data-k");
+          deleteResult(key);
+          renderPanels();
+        }
+      };
+
+      tableDiv.appendChild(table);
+      container.appendChild(tableDiv);
+    }
+
+    // ===== EVENT HANDLERS =====
+
+    $("btnParse").onclick = () => {
+      parsed = parseCoagText($("raw").value);
+      render();
+    };
+
+    $("filter").oninput = () => renderPanels();
+
+    // ===== HELPER FUNCTIONS =====
+
+    function escapeHtml(s) {
+      return String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+    }
+    function escapeAttr(s) { return escapeHtml(s).replace(/"/g, "&quot;"); }
+    function cssEscape(s) { return (window.CSS && CSS.escape) ? CSS.escape(s) : String(s).replace(/"/g, '\\"'); }
+  </script>
+</body>
+</html>

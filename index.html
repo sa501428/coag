@@ -161,6 +161,15 @@
   </div>
 </header>
 
+<section class="panel" aria-label="Notes" style="max-width: 100%; margin: 18px 18px 0 18px;">
+  <div class="hd"><h2>Notes</h2></div>
+  <div class="bd">
+    <div class="row">
+      <textarea id="notesBox" placeholder="Free space for notes..." style="width: 100%; min-height: 120px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); font-family: var(--sans); background: #fff; resize: vertical; font-size: 14px; line-height: 1.5;"></textarea>
+    </div>
+  </div>
+</section>
+
 <section class="panel" aria-label="Comment Builder" style="max-width: 100%; margin: 18px;">
   <div class="hd"><h2>Comment Builder</h2></div>
   <div class="bd">
@@ -624,13 +633,15 @@ function render() {
 
 // ------------------------- COMMENT BUILDER ---------------------------
 
+// Global counter for smart element IDs to ensure uniqueness across all comments
+let globalSmartIdCounter = 0;
+
 // Parse smart text and convert to HTML with interactive elements
 function parseSmartText(text) {
   if (!text) return '';
   
   let html = '';
   let i = 0;
-  let smartIdCounter = 0;
   
   while (i < text.length) {
     // Check for curly brace smart list {option1; option2; option3}
@@ -641,7 +652,7 @@ function parseSmartText(text) {
         const options = braceContent.split(';').map(opt => opt.trim()).filter(opt => opt);
         
         if (options.length > 0) {
-          const smartId = 'smart_' + (smartIdCounter++);
+          const smartId = 'smart_' + (globalSmartIdCounter++);
           // Calculate width based on longest option (rough estimate: ~8px per character)
           const longestOption = options.reduce((a, b) => a.length > b.length ? a : b);
           const estimatedWidth = Math.max(80, longestOption.length * 8 + 30); // min 80px, add padding
@@ -658,7 +669,7 @@ function parseSmartText(text) {
     
     // Check for *** placeholder
     if (text.substring(i, i + 3) === '***') {
-      const smartId = 'smart_' + (smartIdCounter++);
+      const smartId = 'smart_' + (globalSmartIdCounter++);
       // Check for units after *** (common patterns: "*** %", "*** seconds", "*** mg/dl", etc.)
       let unit = '';
       let j = i + 3;
@@ -690,72 +701,73 @@ function parseSmartText(text) {
 
 // Get resolved text from contenteditable div (replaces smart elements with their values)
 function getResolvedText(builderEl) {
-  // Create a map of smart element IDs to their resolved values from the original
-  const valueMap = new Map();
-  
-  // Get values from original selects
-  builderEl.querySelectorAll('.smart-select').forEach(select => {
-    const smartId = select.dataset.smartId;
-    const selectedValue = select.options[select.selectedIndex]?.value || select.value || '';
-    valueMap.set(smartId, selectedValue);
-  });
-  
-  // Get values from original inputs
-  builderEl.querySelectorAll('.smart-input').forEach(input => {
-    const smartId = input.dataset.smartId;
-    const value = input.value.trim() || '***';
-    const unit = input.dataset.unit || '';
-    valueMap.set(smartId, { value, unit });
-  });
-  
-  // Now clone and replace using the value map
-  const clone = builderEl.cloneNode(true);
-  
-  // Replace smart selects with their selected values
-  clone.querySelectorAll('.smart-select').forEach(select => {
-    const smartId = select.dataset.smartId;
-    const resolvedValue = valueMap.get(smartId) || '';
-    const textNode = document.createTextNode(resolvedValue);
-    // Remove unit span if it exists
-    const nextSibling = select.nextSibling;
-    if (nextSibling && nextSibling.nodeType === 1 && nextSibling.tagName === 'SPAN') {
-      nextSibling.remove();
-    }
-    select.parentNode.replaceChild(textNode, select);
-  });
-  
-  // Replace smart inputs with their values (or *** if empty)
-  clone.querySelectorAll('.smart-input').forEach(input => {
-    const smartId = input.dataset.smartId;
-    const data = valueMap.get(smartId);
-    const value = (data && typeof data === 'object') ? data.value : (data || '***');
-    const unit = (data && typeof data === 'object') ? data.unit : '';
-    // Remove the unit span if it exists (next sibling)
-    const nextSibling = input.nextSibling;
-    if (nextSibling && nextSibling.nodeType === 1 && nextSibling.tagName === 'SPAN') {
-      nextSibling.remove();
-    }
-    const textNode = document.createTextNode(value + (unit && value !== '***' ? ' ' + unit : ''));
-    input.parentNode.replaceChild(textNode, input);
-  });
-  
-  // Convert <br> tags to newlines before extracting text
-  clone.querySelectorAll('br').forEach(br => {
-    br.parentNode.replaceChild(document.createTextNode('\n'), br);
-  });
-  
-  // Get text content - this will preserve newlines from text nodes
-  let text = '';
+  // Use TreeWalker to get all nodes in document order and collect values directly
+  const parts = [];
   const walker = document.createTreeWalker(
-    clone,
-    NodeFilter.SHOW_TEXT,
-    null
+    builderEl,
+    NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT,
+    {
+      acceptNode: function(node) {
+        // Skip children of smart-select and smart-input (like option elements)
+        if (node.parentNode) {
+          if (node.parentNode.classList && 
+              (node.parentNode.classList.contains('smart-select') || 
+               node.parentNode.classList.contains('smart-input'))) {
+            return NodeFilter.FILTER_REJECT;
+          }
+        }
+        // Skip unit spans that follow smart-input
+        if (node.nodeType === Node.ELEMENT_NODE && 
+            node.tagName === 'SPAN' && 
+            node.previousSibling && 
+            node.previousSibling.nodeType === Node.ELEMENT_NODE &&
+            node.previousSibling.classList && 
+            node.previousSibling.classList.contains('smart-input')) {
+          return NodeFilter.FILTER_REJECT; // Skip this node and its children
+        }
+        // For smart-select and smart-input elements, we want to process them but skip their children
+        if (node.nodeType === Node.ELEMENT_NODE &&
+            node.classList &&
+            (node.classList.contains('smart-select') || node.classList.contains('smart-input'))) {
+          return NodeFilter.FILTER_ACCEPT; // Accept the element itself, but children will be rejected by parent check
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    }
   );
   
   let node;
   while (node = walker.nextNode()) {
-    text += node.textContent;
+    if (node.nodeType === Node.TEXT_NODE) {
+      // Add all text content - these are processed in document order
+      parts.push(node.textContent);
+    } else if (node.nodeType === Node.ELEMENT_NODE) {
+      if (node.tagName === 'BR') {
+        parts.push('\n');
+      } else if (node.classList && node.classList.contains('smart-select')) {
+        // Get the selected value directly from this select element
+        // Use selectedIndex to get the actual selected option
+        const selectedIndex = node.selectedIndex;
+        if (selectedIndex >= 0 && selectedIndex < node.options.length) {
+          const selectedOption = node.options[selectedIndex];
+          parts.push(selectedOption.value || '');
+        } else {
+          // Fallback to value property
+          parts.push(node.value || '');
+        }
+      } else if (node.classList && node.classList.contains('smart-input')) {
+        // Get the value directly from this input element
+        const value = node.value.trim() || '***';
+        const unit = node.dataset.unit || '';
+        const fullValue = value + (unit && value !== '***' ? ' ' + unit : '');
+        parts.push(fullValue);
+      }
+      // For other elements (like DIV, P, etc.), TreeWalker will automatically 
+      // process their text children in document order, so we don't need to do anything here
+    }
   }
+  
+  let text = parts.join('');
   
   // Normalize multiple spaces but preserve newlines
   text = text.replace(/[ \t]+/g, ' ');
@@ -911,12 +923,13 @@ function addCodeToBuilder(code) {
     builderEl.appendChild(document.createElement('br'));
   }
   
-  // Insert smart HTML
-  const div = document.createElement('div');
-  div.innerHTML = smartHtml;
+  // Insert smart HTML - using a temporary container to preserve text nodes
+  const tempContainer = document.createElement('div');
+  tempContainer.innerHTML = smartHtml;
   const frag = document.createDocumentFragment();
-  while (div.firstChild) {
-    frag.appendChild(div.firstChild);
+  // Move all nodes (including text nodes) to fragment to preserve order
+  while (tempContainer.firstChild) {
+    frag.appendChild(tempContainer.firstChild);
   }
   builderEl.appendChild(frag);
   
