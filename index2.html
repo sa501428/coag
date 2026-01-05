@@ -225,11 +225,51 @@
     <div id="legend" style="margin-bottom: 12px; padding: 10px; background: #f8f9fa; border-radius: 6px; color: #666; font-size: 12px; line-height: 1.6;"></div>
 
     <div id="panels-container"></div>
+
+    <div id="codes-section" style="margin-top: 20px; padding: 15px; background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: none;">
+      <h2 style="margin-bottom: 12px; color: #2c3e50; font-size: 18px;">Potential Comment Codes</h2>
+      <p style="font-size: 12px; color: #7f8c8d; margin-bottom: 10px;">Hover over codes to see comment text. Click × to dismiss.</p>
+      <div id="codes-content" style="margin-top: 10px; display: flex; flex-wrap: wrap; gap: 4px;"></div>
+    </div>
+
+    <div id="optional-codes-section" style="margin-top: 20px; padding: 15px; background: #fff9e6; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: none; border-left: 4px solid #f39c12;">
+      <h2 style="margin-bottom: 12px; color: #2c3e50; font-size: 18px;">Optional Comment Codes (Clinical Context Required)</h2>
+      <p style="font-size: 12px; color: #7f8c8d; margin-bottom: 10px;">These codes may be applicable but require clinical information not available in lab data. Hover over codes to see comment text. Click × to dismiss.</p>
+      <div id="optional-codes-content" style="margin-top: 10px; display: flex; flex-wrap: wrap; gap: 4px;"></div>
+    </div>
   </div>
 
   <script>
     // ===== PARSER FUNCTIONS =====
     
+    function detectAnticoagulants(text) {
+      const upperText = text.toUpperCase();
+      const anticoagulants = [];
+      
+      // List of anticoagulants to detect
+      const anticoags = [
+        { name: "apixaban", variants: ["apixaban"] },
+        { name: "rivaroxaban", variants: ["rivaroxaban"] },
+        { name: "dabigatran", variants: ["dabigatran"] },
+        { name: "warfarin", variants: ["warfarin", "coumadin"] },
+        { name: "heparin", variants: ["heparin", "ufh", "lmwh", "low molecular weight heparin", "unfractionated heparin"] },
+        { name: "argatroban", variants: ["argatroban"] },
+        { name: "bivalirudin", variants: ["bivalirudin"] },
+        { name: "fondaparinux", variants: ["fondaparinux"] }
+      ];
+      
+      for (const ac of anticoags) {
+        for (const variant of ac.variants) {
+          if (upperText.includes(variant.toUpperCase())) {
+            anticoagulants.push(ac.name);
+            break;
+          }
+        }
+      }
+      
+      return [...new Set(anticoagulants)]; // Remove duplicates
+    }
+
     function parseCoagText(input) {
       const text = (input || "").replace(/\r\n/g, "\n").trim();
       const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
@@ -242,6 +282,9 @@
 
       // Capture legend lines like "(H): Data is abnormally high"
       const legend = {};
+      
+      // Detect anticoagulants from the input text
+      const anticoagulants = detectAnticoagulants(text);
 
       for (const line of lines) {
         const ts = line.match(tsRe);
@@ -300,7 +343,7 @@
 
       if (current) panels.push(current);
 
-      return { panels, legend };
+      return { panels, legend, anticoagulants };
     }
 
     function parseResultLine(name, rawValue) {
@@ -347,6 +390,10 @@
       }
 
       const isAbnormal = flags.size > 0 || markers.has("!") || markers.has("Rpt");
+      
+      // Check for unknown flags/markers: any (X) where X is not H or L
+      const hasUnknownMarkers = /\((?!H\)|L\)).*?\)/.test(rawValue) || 
+                                 /[^HL!Rpt\s\w|<>=\-+.,;:()]/.test(rawValue.replace(/\([HL]\)/g, "").replace(/!/g, "").replace(/\bRpt\b/gi, ""));
 
       return {
         name,
@@ -356,11 +403,52 @@
         markers: [...markers].filter(m => m !== "Rpt"), // keep Rpt separately in isReport
         isReport: markers.has("Rpt"),
         isAbnormal,
+        hasUnknownMarkers, // Flag for unknown markers
         text
       };
     }
 
     // ===== STATUS CALCULATION FUNCTIONS =====
+    
+    // Helper functions for PT/PTT matching with word boundaries
+    function isPT(nameUpper) {
+      return /\bPT\b/.test(nameUpper) && !/\bPTT\b/.test(nameUpper) && 
+             !nameUpper.includes("PT-INR") && !nameUpper.includes("HEPARIN") && 
+             !nameUpper.includes("MIXING") && !nameUpper.includes("PROTEIN");
+    }
+    
+    function isPTT(nameUpper) {
+      return /\bPTT\b/.test(nameUpper) && !nameUpper.includes("HEPARIN") && !nameUpper.includes("MIXING");
+    }
+    
+    // Canonical test key mapping for reliable test matching
+    // IMPORTANT: Order matters! More specific patterns must come BEFORE general ones
+    const CANONICAL_TESTS = [
+      { key: "PT", re: [/^PT(\b|$)/i, /^PT\s*\(POC\)/i] },
+      { key: "PTT", re: [/^PTT(\b|$)/i, /^APTT(\b|$)/i] },
+      { key: "DRVVT", re: [/DRVVT/i, /DILUTED\s+RUSSELL/i] },
+      { key: "LUPUS_ANTICOAGULANT", re: [/LUPUS.*ANTICOAGULANT/i] },
+      { key: "APC_RESISTANCE", re: [/PROTEIN\s+C\s+RESISTANCE/i, /APC\s+RESISTANCE/i, /ACT.*PROTEIN\s+C\s+RESISTANCE/i, /ACTIVATED\s+PROTEIN\s+C\s+RESISTANCE/i] },
+      // Protein C/S/AT3: Distinguish Activity vs Antigen
+      { key: "PROTEIN_C_ACTIVITY", re: [/PROTEIN\s+C\s+ACTIVITY/i, /^PC\s+ACTIVITY/i] },
+      { key: "PROTEIN_C_ANTIGEN", re: [/PROTEIN\s+C\s+ANTIGEN/i, /^PC\s+ANTIGEN/i, /PROTEIN\s+C\s+AG\s*[\(%]/i] },
+      { key: "PROTEIN_S_ACTIVITY", re: [/PROTEIN\s+S\s+ACTIVITY/i, /^PS\s+ACTIVITY/i] },
+      { key: "PROTEIN_S_ANTIGEN", re: [/PROTEIN\s+S\s+FREE\s+AG/i, /PROTEIN\s+S\s+ANTIGEN/i, /PROTEIN\s+S\s+AG\s*[\(%]/i, /^PS\s+ANTIGEN/i] },
+      { key: "AT3_ACTIVITY", re: [/AT3\s+ACTIVITY/i, /ANTITHROMBIN\s+III\s+ACTIVITY/i] },
+      { key: "AT3_ANTIGEN", re: [/AT3\s+ANTIGEN/i, /ANTITHROMBIN\s+III\s+AG\s*[\(%]/i, /ANTITHROMBIN\s+III\s+ANTIGEN/i] },
+      { key: "G20210A", re: [/G20210A/i, /PROTHROMBIN.*G20210A/i] },
+      { key: "ANTI_XA", re: [/ANTI.*XA.*SCREEN/i, /ANTI-XA\s+SCREEN/i] }
+    ];
+    
+    function canonicalKey(name) {
+      const nameUpper = name.toUpperCase();
+      for (const c of CANONICAL_TESTS) {
+        if (c.re.some(rx => rx.test(nameUpper))) {
+          return c.key;
+        }
+      }
+      return nameUpper;
+    }
 
     function calculateStatus(result) {
       const name = result.name.toUpperCase();
@@ -370,6 +458,20 @@
       const rawValue = result.rawValue.toUpperCase();
       const values = result.values || [];
       const text = (result.text || "").toUpperCase();
+
+      // Check for binary tests first (before hasUnknownMarkers check)
+      // These tests expect text values like "NEGATIVE", "POSITIVE", etc.
+      const isBinaryTest = name.includes("G20210A") || (name.includes("GENE MUTATION") && name.includes("20210")) ||
+                           (name.includes("ANTI-XA") && name.includes("SCREEN")) ||
+                           (name.includes("PT") && name.includes("HEPARIN")) ||
+                           (name.includes("LUPUS") && name.includes("ANTICOAGULANT")) ||
+                           name.includes("DRVVT");
+
+      // If unknown markers/flags detected, treat as INVALID
+      // BUT skip this check for binary tests that expect text values
+      if (result.hasUnknownMarkers && !isBinaryTest) {
+        return "INVALID";
+      }
 
       // If value contains "Rpt", set to INVALID if available, otherwise leave unset
       if (result.isReport || rawValue.includes("RPT") || text.includes("RPT")) {
@@ -383,20 +485,38 @@
         return null;
       }
 
-      // PT and PTT: (H) = PROLONGED, (L) = SHORTENED, neither = NORMAL
-      if (name.includes("PT") && !name.includes("PT-INR") && !name.includes("HEPARIN")) {
+      // PT and PT (POC): (H) = PROLONGED, (L) = SHORTENED, neither = NORMAL (only if we have a value)
+      if (isPT(name)) {
         if (hasH) return "PROLONGED";
         if (hasL) return "SHORTENED";
-        return "NORMAL";
+        // Only return NORMAL if we have a numeric value, otherwise null
+        if (values.length > 0 || rawValue.trim()) {
+          return "NORMAL";
+        }
+        return null;
       }
-      if (name.includes("PTT") && !name.includes("HEPARIN")) {
+      // PTT and PTT (Hepzyme): (H) = PROLONGED, (L) = SHORTENED, neither = NORMAL (only if we have a value)
+      if (isPTT(name)) {
         if (hasH) return "PROLONGED";
         if (hasL) return "SHORTENED";
-        return "NORMAL";
+        // Only return NORMAL if we have a numeric value, otherwise null
+        if (values.length > 0 || rawValue.trim()) {
+          return "NORMAL";
+        }
+        return null;
+      }
+      
+      // PTT Mixing Studies: Rpt (no status calculation, leave as null)
+      if (name.includes("PTT") && name.includes("MIXING")) {
+        // If Rpt, leave unset (no status options for this test)
+        if (result.isReport || rawValue.includes("RPT") || text.includes("RPT")) {
+          return null;
+        }
+        return null; // Always null for mixing studies
       }
 
       // Cardiolipin and glycoprotein antibodies: <20 = NEGATIVE, 20-40 = MODERATE, >40 = ELEVATED
-      if (name.includes("CARDIOLIPIN") || name.includes("GLYCOPROTEIN")) {
+      if (name.includes("CARDIOLIPIN") || name.includes("GLYCOPROTEIN") || name.includes("B2")) {
         // Get the numeric value (handle <9.4, 34.3, etc.)
         if (values.length > 0) {
           const val = values[0];
@@ -404,9 +524,8 @@
           if (val.op === "<" || val.op === "<=") {
             // If the number itself is < 20, then the value is definitely < 20
             if (val.num < 20) return "NEGATIVE";
-            // If the number is >= 20, we can't be certain, but it's at least < that number
-            // For simplicity, if it's < 20, it's NEGATIVE; otherwise we can't determine
-            return null; // Can't determine for < values where num >= 20
+            // If the number is >= 20, we can't be certain, return null
+            return null;
           } else {
             // Regular numeric comparison
             if (val.num < 20) return "NEGATIVE";
@@ -414,15 +533,22 @@
             if (val.num > 40) return "ELEVATED";
           }
         }
+        // No numeric value found, return null
+        return null;
       }
 
-      // DRVVT screen and test: positive, negative, or invalid
-      if (name.includes("DRVVT")) {
+      // DRVVT (screen), DRVVT (confirm), Diluted Russell Viper Venom Time (DRVVT), Confirmation: 
+      // Rpt or Positive or Negative or Invalid
+      if (name.includes("DRVVT") || (name.includes("DILUTED") && name.includes("RUSSELL") && name.includes("VIPER"))) {
         const combined = (rawValue + " " + text).toUpperCase();
         
-        // Check for invalid/uninterpretable first
-        if (combined.includes("UNINTERPRETABLE") || combined.includes("INVALID") || 
-            combined.includes("UNINTERPRETABLE")) {
+        // Check for Rpt first
+        if (result.isReport || combined.includes("RPT") || combined.includes("REPORT")) {
+          return "INVALID"; // Rpt maps to INVALID for DRVVT
+        }
+        
+        // Check for invalid/uninterpretable
+        if (combined.includes("UNINTERPRETABLE") || combined.includes("INVALID")) {
           return "INVALID";
         }
         
@@ -436,15 +562,20 @@
           return "NEGATIVE";
         }
         
-        // Default to negative if not clear
-        return "NEGATIVE";
+        // If unclear, return null (requires manual override) - never default to negative
+        return null;
       }
 
-      // Lupus anticoagulant (screen): positive, negative, or invalid
+      // Lupus anticoagulant (screen): Negative or Positive or Rpt or Invalid
       if (name.includes("LUPUS") && name.includes("ANTICOAGULANT")) {
         const combined = (rawValue + " " + text).toUpperCase();
         
-        // Check for invalid/uninterpretable first
+        // Check for Rpt first
+        if (result.isReport || combined.includes("RPT") || combined.includes("REPORT")) {
+          return "INVALID"; // Rpt maps to INVALID for LA
+        }
+        
+        // Check for invalid/uninterpretable
         if (combined.includes("UNINTERPRETABLE") || combined.includes("INVALID")) {
           return "INVALID";
         }
@@ -460,11 +591,24 @@
           return "NEGATIVE";
         }
         
-        // Default to negative if not clear
-        return "NEGATIVE";
+        // If unclear, return null (requires manual override) - never default to negative
+        return null;
+      }
+
+      // Act Protein C Resistance (confirm): positive or negative (when high (H) is positive)
+      // MUST check this BEFORE checking for "PROTEIN C" to avoid confusion
+      if (name.includes("PROTEIN C RESISTANCE") || name.includes("APC RESISTANCE") || 
+          name.includes("ACTIVATED PROTEIN C RESISTANCE") || name.includes("ACT PROTEIN C RESISTANCE")) {
+        if (hasH) return "POSITIVE";
+        // Only return NEGATIVE if we have a value, otherwise null
+        if (values.length > 0 || rawValue.trim()) {
+          return "NEGATIVE";
+        }
+        return null;
       }
 
       // Protein C, S, and AT3: normal, high, or low
+      // This must come AFTER checking for APC Resistance
       if (name.includes("PROTEIN C") || name.includes("PROTEIN S") || 
           name.includes("AT3") || name.includes("ANTITHROMBIN")) {
         const combined = (rawValue + " " + text).toUpperCase();
@@ -481,25 +625,15 @@
         }
         if (hasH) return "HIGH";
         if (hasL) return "LOW";
-        return "NORMAL";
-      }
-
-      // Act Protein C Resistance (confirm): positive or negative (when high (H) is positive)
-      if (name.includes("PROTEIN C RESISTANCE")) {
-        if (hasH) return "POSITIVE";
-        return "NEGATIVE";
+        // Only return NORMAL if we have a value, otherwise null
+        if (values.length > 0 || rawValue.trim()) {
+          return "NORMAL";
+        }
+        return null;
       }
 
       // PT with Heparin Neutralization: POSITIVE vs NEGATIVE
       if (name.includes("PT") && name.includes("HEPARIN")) {
-        if (rawValue.includes("POSITIVE") || text.includes("POSITIVE")) {
-          return "POSITIVE";
-        }
-        return "NEGATIVE";
-      }
-
-      // G20210A Gene mutation: NEGATIVE, POSITIVE, or PENDING
-      if (name.includes("G20210A") || name.includes("GENE MUTATION")) {
         const combined = (rawValue + " " + text).toUpperCase();
         if (combined.includes("POSITIVE")) {
           return "POSITIVE";
@@ -507,14 +641,38 @@
         if (combined.includes("NEGATIVE")) {
           return "NEGATIVE";
         }
-        // Default to PENDING if not clear
-        return "PENDING";
+        // If not explicitly positive or negative, return null
+        return null;
       }
 
-      // Anti-Xa Screen: DETECTED, NOT DETECTED, or INVALID
+      // G20210A Gene mutation: POSITIVE or NEGATIVE or INVALID
+      if (name.includes("G20210A") || (name.includes("GENE MUTATION") && name.includes("20210"))) {
+        const combined = (rawValue + " " + text).toUpperCase();
+        
+        // Check for invalid/uninterpretable
+        if (combined.includes("UNINTERPRETABLE") || combined.includes("INVALID")) {
+          return "INVALID";
+        }
+        
+        if (combined.includes("POSITIVE")) {
+          return "POSITIVE";
+        }
+        if (combined.includes("NEGATIVE")) {
+          return "NEGATIVE";
+        }
+        // If unclear, return null (not INVALID)
+        return null;
+      }
+
+      // Anti-Xa Screen: Detected or Not Detected or Invalid
       if (name.includes("ANTI-XA") && name.includes("SCREEN")) {
         const combined = (rawValue + " " + text).toUpperCase();
 
+        // Check for invalid/uninterpretable
+        if (combined.includes("UNINTERPRETABLE") || combined.includes("INVALID")) {
+          return "INVALID";
+        }
+        
         // Check for not detected
         if (combined.includes("NOT DETECTED")) {
           return "NOT DETECTED";
@@ -525,8 +683,41 @@
           return "DETECTED";
         }
         
-        // Default to NOT DETECTED if not clear
-        return "INVALID";
+        // If unclear, return null (not INVALID)
+        return null;
+      }
+      
+      // Anti-Xa (Fondaparinux): Detected or Not Detected or Invalid or number
+      if (name.includes("ANTI-XA") && name.includes("FONDAPARINUX")) {
+        const combined = (rawValue + " " + text).toUpperCase();
+        
+        // Check for invalid/uninterpretable
+        if (combined.includes("UNINTERPRETABLE") || combined.includes("INVALID")) {
+          return "INVALID";
+        }
+        
+        // Check for not detected
+        if (combined.includes("NOT DETECTED")) {
+          return "NOT DETECTED";
+        }
+        
+        // Check for detected
+        if (combined.includes("DETECTED")) {
+          return "DETECTED";
+        }
+        
+        // If there's a numeric value, it's a number result (no status needed)
+        if (values.length > 0) {
+          return null; // Number result, no status
+        }
+        
+        // If unclear, return null (not INVALID)
+        return null;
+      }
+      
+      // Factor II Gene analysis: narrative result (no status calculation)
+      if (name.includes("FACTOR II") && name.includes("GENE")) {
+        return null; // Narrative result, no status
       }
 
       return null; // No special status calculation
@@ -535,48 +726,2418 @@
     function getStatusOptions(testName) {
       const name = testName.toUpperCase();
       
-      if ((name.includes("PT") && !name.includes("PT-INR") && !name.includes("HEPARIN")) || 
-          (name.includes("PTT") && !name.includes("HEPARIN"))) {
+      // PT, PT (POC): NUMBER - NORMAL, PROLONGED, SHORTENED
+      if (isPT(name)) {
         return ["NORMAL", "PROLONGED", "SHORTENED"];
       }
       
-      if (name.includes("CARDIOLIPIN") || name.includes("GLYCOPROTEIN")) {
+      // PTT, PTT (Hepzyme): NUMBER - NORMAL, PROLONGED, SHORTENED
+      if (isPTT(name)) {
+        return ["NORMAL", "PROLONGED", "SHORTENED"];
+      }
+      
+      // PTT Mixing Studies: Rpt (no status options)
+      if (name.includes("PTT") && name.includes("MIXING")) {
+        return null; // No status options for narrative/Rpt tests
+      }
+      
+      // B2 glycoprotein 1 Ab, IgG/IgM: NUMBER - NEGATIVE, MODERATE, ELEVATED
+      // Cardiolipin Ab, IgG/IgM: NUMBER - NEGATIVE, MODERATE, ELEVATED
+      if (name.includes("CARDIOLIPIN") || name.includes("GLYCOPROTEIN") || name.includes("B2")) {
         return ["NEGATIVE", "MODERATE", "ELEVATED"];
       }
       
-      if (name.includes("DRVVT")) {
+      // DRVVT (screen), DRVVT (confirm), Diluted Russell Viper Venom Time (DRVVT), Confirmation: 
+      // Rpt or Positive or Negative or Invalid
+      if (name.includes("DRVVT") || (name.includes("DILUTED") && name.includes("RUSSELL") && name.includes("VIPER"))) {
         return ["POSITIVE", "NEGATIVE", "INVALID"];
       }
       
+      // Lupus anticoagulant (screen): Negative or Positive or Rpt or Invalid
       if (name.includes("LUPUS") && name.includes("ANTICOAGULANT")) {
         return ["POSITIVE", "NEGATIVE", "INVALID"];
       }
       
-      if (name.includes("PROTEIN C")) {
-        return ["NORMAL", "HIGH", "LOW"];
-      }
-      
-      if (name.includes("PROTEIN S") || name.includes("AT3") || name.includes("ANTITHROMBIN")) {
-        return ["NORMAL", "HIGH", "LOW", "INVALID"];
-      }
-      
-      if (name.includes("PROTEIN C RESISTANCE")) {
+      // Act Protein C Resistance (confirm): NUMBER - POSITIVE, NEGATIVE
+      // MUST check this BEFORE checking for "PROTEIN C" to avoid confusion
+      if (name.includes("PROTEIN C RESISTANCE") || name.includes("APC RESISTANCE") || 
+          name.includes("ACTIVATED PROTEIN C RESISTANCE") || name.includes("ACT PROTEIN C RESISTANCE")) {
         return ["POSITIVE", "NEGATIVE"];
       }
       
+      // Protein C Activity: NUMBER - NORMAL, HIGH, LOW
+      // Protein C Antigen: NUMBER - NORMAL, HIGH, LOW (same status options)
+      // This must come AFTER checking for APC Resistance
+      if (name.includes("PROTEIN C") && !name.includes("RESISTANCE")) {
+        return ["NORMAL", "HIGH", "LOW"];
+      }
+      
+      // Protein S Activity: NUMBER - NORMAL, HIGH, LOW, INVALID
+      // Protein S Free Ag (%): NUMBER - NORMAL, HIGH, LOW, INVALID
+      // Protein S Antigen: NUMBER - NORMAL, HIGH, LOW, INVALID
+      if (name.includes("PROTEIN S")) {
+        return ["NORMAL", "HIGH", "LOW", "INVALID"];
+      }
+      
+      // AT3 Activity: NUMBER - NORMAL, HIGH, LOW, INVALID
+      // Antithrombin III Ag (%): NUMBER - NORMAL, HIGH, LOW, INVALID
+      // AT3 Antigen: NUMBER - NORMAL, HIGH, LOW, INVALID
+      if (name.includes("AT3") || name.includes("ANTITHROMBIN")) {
+        return ["NORMAL", "HIGH", "LOW", "INVALID"];
+      }
+      
+      // PT with Heparin Neutralization: POSITIVE, NEGATIVE
       if (name.includes("PT") && name.includes("HEPARIN")) {
         return ["POSITIVE", "NEGATIVE"];
       }
       
-      if (name.includes("G20210A") || name.includes("GENE MUTATION")) {
-        return ["NEGATIVE", "POSITIVE", "PENDING"];
+      // G20210A Gene mutation: POSITIVE or NEGATIVE or INVALID
+      if (name.includes("G20210A") || (name.includes("GENE MUTATION") && name.includes("20210"))) {
+        return ["NEGATIVE", "POSITIVE", "INVALID"];
       }
       
+      // Factor II Gene analysis: narrative result (no status options)
+      if (name.includes("FACTOR II") && name.includes("GENE")) {
+        return null; // Narrative result, no status options
+      }
+      
+      // Factor VII/VIII/IX/XI/XII Activity: NUMBER (no specific status options, but can have H/L flags)
+      // VWF Ag, VWF Activity: NUMBER (no specific status options, but can have H/L flags)
+      // These are numeric tests without predefined status categories
+      
+      // Anti-Xa Screen: Detected or Not Detected or Invalid
       if (name.includes("ANTI-XA") && name.includes("SCREEN")) {
         return ["DETECTED", "NOT DETECTED", "INVALID"];
       }
       
+      // Anti-Xa (Fondaparinux): Detected or Not Detected or Invalid or number
+      if (name.includes("ANTI-XA") && name.includes("FONDAPARINUX")) {
+        return ["DETECTED", "NOT DETECTED", "INVALID"];
+      }
+      
       return null;
+    }
+
+    // ===== COMMENT GENERATION =====
+    
+    // Comment data from CSV (keyed by code)
+    const commentData = {
+      "1A": "The PT and PTT are normal.",
+      "1B": "The PT and PTT are prolonged.",
+      "1C": "The PT is prolonged and the PTT is normal.",
+      "1D": "The PTT is prolonged.",
+      "1S": "The PTT is shortened.",
+      "2S": "The PT is shortened.",
+      "NN1": "The PTT-LA and DRVVT screening tests are negative for a lupus anticoagulant.",
+      "NN2": "The PTT-LA and DRVVT screens are negative for a lupus anticoagulant.  The IgM/IgG anticardiolipin antibodies and IgM/IgG anti-beta2-glycoprotein I antibodies are not elevated.",
+      "NN3": "1. The PT and PTT are normal.\n\n2. The PTT-LA and DRVVT screens are negative for a lupus anticoagulant.  The IgG and IgM anticardiolipin antibodies and the IgG and IgM anti-beta2-glycoprotein I antibodies are not elevated.",
+      "L1": "The PTT-LA lupus anticoagulant screen is negative.",
+      "L2": "The PTT-LA screen is uninterpretable due to {apixaban;rivaroxaban}.  The confirmatory hexagonal phase assay is {negative;positive}.  Taken together, the result is {negative;positive} for a lupus anticoagulant.",
+      "D1": "The DRVVT test is NEGATIVE for a lupus anticoagulant.",
+      "D2": "The DRVVT test is POSITIVE for a lupus anticoagulant.",
+      "DU": "The DRVVT test cannot be interpreted in the context of {anticoagulant}.",
+      "APS": "The diagnosis of antiphospholipid antibody syndrome (APLAS) requires at least one positive antiphospholipid antibody test (e.g., positive hexagonal phase PTT-LA OR positive DRVVT OR anticardiolipin/anti-beta2-glycoprotein I) as well as thrombosis or pregnancy complications. Persistently positive tests and proximity to the clinical event increase the likelihood of APLAS. If clinically indicated, repeat testing at least 12 weeks from the positive result. For updated criteria please see PMID 37635643.",
+      "ABM": "The {antibody} is moderately elevated. Although this value is above the reference range, values under 40 do not count toward the diagnosis of antiphospholipid antibody syndrome. For updated criteria please see PMID 37635643.",
+      "ABH": "The {antibody} is markedly elevated. Positive anticardiolipin and/or anti-beta2-glycoprotein I values are considered titers of 40 and above.",
+      "ABNORM": "The anticardiolipin antibody and anti-beta2-glycoprotein I antibodies are not elevated.",
+      "N1": "Protein C, protein S, and antithrombin III activity are normal.",
+      "N2": "Protein C, protein S, and antithrombin III activity are normal.",
+      "CSAL": "Protein C, protein S and antithrombin III are decreased. These results can occur with liver dysfunction or consumption (thrombosis, DIC, or surgery).",
+      "CSL": "Protein C and protein S are decreased.",
+      "SAL": "Protein S and antithrombin III are low.",
+      "CAL2": "Protein C and antithrombin III are decreased.",
+      "CL": "Protein C is decreased.",
+      "SL3": "Protein S is decreased.",
+      "LAH": "Antithrombin III is slightly low.",
+      "LAHU": "Antithrombin III is low.",
+      "FVL1": "The activated protein C resistance assay is normal, indicating that there is no laboratory evidence for the factor V Leiden mutation.",
+      "FVL2": "This patient has activated protein C resistance (APCR) due to heterozygosity for the factor V Leiden mutation, which confers a 4-5 fold increased risk for a first episode of venous thromboembolism (VTE) compared with the risk of first VTE for controls.  Note that for patients who have had a first unprovoked VTE, heterozygosity for factor V Leiden does not confer a clinically relevant increased risk for recurrent VTE compared to control patients who have had a first unprovoked VTE.",
+      "PTG1": "An assay for the prothrombin mutation G20210A is normal.",
+      "PTG2": "An assay for prothrombin G20210A is pending at this time. Results will be reported separately in the chart when available.",
+      "WNL": "1. The PT and PTT are normal.  2. There is no evidence of a lupus anticoagulant.  The DRVVT and PTT-LA screens are negative.  The anticardiolipin antibody and anti-beta2-glycoprotein I antibodies are not elevated.  3. The protein C, S, and ATIII are normal.  4. The activated protein C resistance assay is normal, indicating that there is no laboratory evidence for the factor V Leiden mutation.",
+      "PTN": "The PT is normal.",
+      "PTTN": "The PTT is normal.",
+      "NOX": "An anti-Xa assay is negative for Xa-inhibiting anticoagulants.",
+      "XA": "An Anti-Xa assay detects an anticoagulant.",
+      "DXA": "An Anti-Xa assay detects an anticoagulant, presumably {apixaban; rivaroxaban} at *** IU/mL. {apixaban; rivaroxaban} exposure can prolong the PT and, to a lesser extent, the PTT. PT and PTT can also be normal despite {apixaban; rivaroxaban}.",
+      "NODV": "Note that the lupus anticoagulant panel is incomplete because the DRVVT cannot be interpreted due to {rivaroxaban, apixaban, warfarin} interference. If clinically indicated, lupus anticoagulant testing can be repeated when the patient is no longer on this anticoagulant to allow for interpretation of the DRVVT result.",
+      "WCS": "Protein C and S activities cannot be interpreted because of {rivaroxaban, apixaban, warfarin} exposure. If there is interest in determining if the patient has a hereditary deficiency of protein C or protein S, it will be necessary to evaluate the patient after therapy has been discontinued for at least 20 days and when the PT is normal (without plasma transfusion).",
+      "ECMO1": "The PTT is prolonged in this acutely ill patient on ECMO and heparin.",
+      "ECMOHEP": "The PT and PTT are prolonged in this acutely ill patient on ECMO and heparin.",
+      "LH": "Lupus anticoagulant tests were performed after removal of heparin from the specimen.",
+      "FD": "Given the findings below, the PTT is likely to be prolonged due to a combination of lupus anticoagulant and factor deficiency {VIII/IX,X,XI,XIII}.",
+      "FDLA": "The PTT is likely prolonged due to a lupus anticoagulant in this specimen."
+    };
+
+    // ===== PLACEHOLDER RESOLVER =====
+    
+    function resolvePlaceholders(text, context, codeHint = null) {
+      if (!text) return text;
+      
+      let resolved = text;
+      const detected = context.anticoagulants || [];
+      
+      // Special handling for L2: {apixaban;rivaroxaban} can accept Apixaban, Rivaroxaban, Dabigatran, Warfarin
+      if (codeHint === "L2" || (codeHint === null && text.includes("PTT-LA screen is uninterpretable"))) {
+        const l2Pattern = /\{apixaban\s*;\s*rivaroxaban\}/gi;
+        if (l2Pattern.test(resolved)) {
+          const l2Options = ["apixaban", "rivaroxaban", "dabigatran", "warfarin"];
+          const found = l2Options.find(opt => detected.includes(opt));
+          if (found) {
+            resolved = resolved.replace(l2Pattern, found);
+          } else {
+            resolved = resolved.replace(l2Pattern, "anticoagulant");
+          }
+        }
+      }
+      
+      // DU/NODV: {apixaban;rivaroxaban;warfarin} or {rivaroxaban, apixaban, warfarin}
+      // Only Apixaban, Rivaroxaban, Warfarin (NOT Dabigatran)
+      const duPattern = /\{apixaban\s*;\s*rivaroxaban\s*;\s*warfarin\}/gi;
+      if (duPattern.test(resolved)) {
+        const duOptions = ["apixaban", "rivaroxaban", "warfarin"];
+        const found = duOptions.find(opt => detected.includes(opt));
+        if (found) {
+          resolved = resolved.replace(duPattern, found);
+        } else {
+          resolved = resolved.replace(duPattern, "anticoagulant");
+        }
+      }
+      
+      const duCommaPattern = /\{rivaroxaban\s*,\s*apixaban\s*,\s*warfarin\}/gi;
+      if (duCommaPattern.test(resolved)) {
+        const duOptions = ["rivaroxaban", "apixaban", "warfarin"];
+        const found = duOptions.filter(opt => detected.includes(opt));
+        if (found.length > 0) {
+          resolved = resolved.replace(duCommaPattern, found.join(", "));
+        } else {
+          resolved = resolved.replace(duCommaPattern, "anticoagulant");
+        }
+      }
+      
+      // Generic {apixaban;rivaroxaban} pattern (if not already handled as L2)
+      const genericPattern = /\{apixaban\s*;\s*rivaroxaban\}/gi;
+      if (genericPattern.test(resolved) && codeHint !== "L2") {
+        const genericOptions = ["apixaban", "rivaroxaban"];
+        const found = genericOptions.find(opt => detected.includes(opt));
+        if (found) {
+          resolved = resolved.replace(genericPattern, found);
+        } else {
+          resolved = resolved.replace(genericPattern, "anticoagulant");
+        }
+      }
+      
+      // Replace {negative;positive} - context-driven based on test result
+      const negPosPattern = /\{negative\s*;\s*positive\}/gi;
+      if (negPosPattern.test(resolved)) {
+        // Use context.testResult if available (e.g., LA confirmatory result)
+        if (context.testResult) {
+          const resultLower = String(context.testResult).toLowerCase();
+          if (resultLower.includes("positive") || resultLower === "positive") {
+            resolved = resolved.replace(negPosPattern, "positive");
+          } else if (resultLower.includes("negative") || resultLower === "negative") {
+            resolved = resolved.replace(negPosPattern, "negative");
+          } else {
+            // If unclear, leave placeholder or mark as INVALID
+            resolved = resolved.replace(negPosPattern, "[INVALID]");
+          }
+        } else {
+          // No context available - leave placeholder unresolved rather than guessing
+          resolved = resolved.replace(negPosPattern, "[UNRESOLVED]");
+        }
+      }
+      
+      // Replace {and did not correct; but corrected} - use first option (can be enhanced with context)
+      resolved = resolved.replace(/\{and did not correct\s*;\s*but corrected\}/gi, "and did not correct");
+      
+      // Only replace known placeholders - leave unknown ones intact
+      // Known patterns: {antibody}, {anticoagulant}, etc. (already handled above)
+      // Do NOT aggressively replace all {...} patterns
+      
+      return resolved;
+    }
+
+    // ===== CLASSIFICATION FUNCTIONS =====
+    
+    function classifyTimeAssay(result) {
+      if (!result) return "missing";
+      if (result.status === "INVALID") return "uninterpretable";
+      if (result.status === "PROLONGED") return "prolonged";
+      if (result.status === "SHORTENED") return "shortened";
+      if (result.status === "NORMAL") return "normal";
+      return "missing";
+    }
+    
+    function classifyNumeric(result) {
+      if (!result) return "missing";
+      if (result.status === "INVALID") return "uninterpretable";
+      if (result.status === "HIGH") return "high";
+      if (result.status === "LOW") return "low";
+      if (result.status === "NORMAL") return "normal";
+      return "missing";
+    }
+    
+    function classifyBinary(result) {
+      if (!result) return "missing";
+      if (result.status === "INVALID") return "uninterpretable";
+      const status = (result.status || "").toUpperCase();
+      if (status.includes("POSITIVE") || status === "POSITIVE") return "positive";
+      if (status.includes("NEGATIVE") || status === "NEGATIVE") return "negative";
+      if (status === "DETECTED") return "positive";
+      if (status === "NOT DETECTED") return "negative";
+      return "unknown";
+    }
+    
+    // ===== NUMBERED POINTS HELPERS =====
+    
+    function addNumberedPoint(points, text) {
+      if (!text || !text.trim()) return;
+      const n = points.length + 1;
+      points.push(`${n}. ${text.trim()}`);
+    }
+    
+    function joinPoints(points) {
+      return points.join("\n\n");
+    }
+    
+    // ===== SECTION BUILDERS =====
+    
+    function buildSection1_PT_PTT(results, testMap, getResult, context) {
+      // Use canonical matching - PT will match PT (POC) via canonicalKey
+      const ptResult = getResult("PT");
+      const pttResult = getResult("PTT");
+      
+      const ptStatus = classifyTimeAssay(ptResult);
+      const pttStatus = classifyTimeAssay(pttResult);
+      
+      if (ptStatus === "missing" && pttStatus === "missing") return "";
+      
+      let basePhrase = "";
+      
+      if (ptStatus === "normal" && pttStatus === "normal") {
+        basePhrase = commentData["1A"] || "The PT and PTT are normal.";
+      } else if (ptStatus === "prolonged" && pttStatus === "prolonged") {
+        basePhrase = commentData["1B"] || "The PT and PTT are prolonged.";
+      } else if (ptStatus === "prolonged" && pttStatus === "normal") {
+        basePhrase = commentData["1C"] || "The PT is prolonged and the PTT is normal.";
+      } else if (ptStatus === "normal" && pttStatus === "prolonged") {
+        basePhrase = commentData["1D"] || "The PTT is prolonged.";
+      } else if (ptStatus === "normal" && pttStatus === "shortened") {
+        basePhrase = commentData["1S"] || "The PTT is shortened.";
+      } else if (ptStatus === "shortened" && pttStatus === "normal") {
+        basePhrase = commentData["2S"] || "The PT is shortened.";
+      } else if (ptStatus === "prolonged" && pttStatus === "missing") {
+        basePhrase = commentData["PTN"] ? "The PT is prolonged." : "The PT is prolonged.";
+      } else if (ptStatus === "normal" && pttStatus === "missing") {
+        basePhrase = commentData["PTN"] || "The PT is normal.";
+      } else if (pttStatus === "prolonged" && ptStatus === "missing") {
+        basePhrase = commentData["1D"] || "The PTT is prolonged.";
+      } else if (pttStatus === "normal" && ptStatus === "missing") {
+        basePhrase = commentData["PTTN"] || "The PTT is normal.";
+      }
+      
+      // NOX/XA/DXA inserts - always comment if test exists
+      const inserts = [];
+      const noxResult = getResult("Anti-Xa Screen");
+      const anticoags = context.anticoagulants || [];
+      const xaSpecificAnticoags = ["apixaban", "rivaroxaban", "heparin", "dabigatran"];
+      const hasXaAnticoag = anticoags.some(ac => xaSpecificAnticoags.includes(ac));
+      
+      if (noxResult) {
+        const noxStatus = classifyBinary(noxResult);
+        if (noxStatus === "negative") {
+          inserts.push(commentData["NOX"] || "An anti-Xa assay is negative for Xa-inhibiting anticoagulants.");
+        } else if (noxStatus === "positive" || noxStatus === "detected") {
+          // Use DXA if Apixaban or Rivaroxaban detected, otherwise XA
+          if (hasXaAnticoag && (anticoags.includes("apixaban") || anticoags.includes("rivaroxaban"))) {
+            const dxaText = commentData["DXA"] || commentData["XA"] || "An Anti-Xa assay detects an anticoagulant.";
+            inserts.push(resolvePlaceholders(dxaText, context));
+          } else {
+            // Generic language if no specific anticoagulant detected
+            inserts.push(commentData["XA"] || "An Anti-Xa assay detects an anticoagulant.");
+          }
+        }
+      }
+      
+      let text = basePhrase;
+      if (inserts.length > 0) {
+        text = text + " " + inserts.join(" ");
+      }
+      
+      // FD/FDLA rule: If PT prolonged and LA positive, add FDLA or FD to Section 1
+      if (ptStatus === "prolonged") {
+        // Check if LA is positive (from Section 5 context)
+        const laResult = getResult("Lupus anticoagulant (screen)");
+        const laStatus = laResult ? classifyBinary(laResult) : null;
+        // Also check DRVVT as alternative LA test
+        const drvvtResult = getResult("DRVVT (screen)") || getResult("DRVVT (confirm)") || getResult("DRVVT");
+        const drvvtStatus = drvvtResult ? classifyBinary(drvvtResult) : null;
+        
+        const laPositive = (laStatus === "positive") || (drvvtStatus === "positive");
+        
+        if (laPositive) {
+          // Add FDLA when PT prolonged and LA positive
+          const fdlaText = commentData["FDLA"] || "The PTT is likely prolonged due to a lupus anticoagulant in this specimen.";
+          text = text + " " + fdlaText;
+        }
+      }
+      
+      return text.trim();
+    }
+    
+    function buildSection2_Factors(results, testMap, getResult, context) {
+      const factorTests = [
+        "Factor II", "Factor V", "Factor VII", "Factor VIII", "Factor IX",
+        "Factor X", "Factor XI", "Factor XII", "Factor XIII"
+      ];
+      
+      const present = [];
+      for (const testName of factorTests) {
+        const result = getResult(testName) || getResult(testName + " Activity");
+        if (result) present.push({ name: testName, result });
+      }
+      
+      if (present.length === 0) return "";
+      
+      // For now, simplified - would need CSV phrases per factor
+      return ""; // Factors section needs more CSV data
+    }
+    
+    function buildSection3_NaturalAnticoagulants(results, testMap, getResult, context) {
+      // Prefer Activity tests (most common), but also check for Antigen if Activity not found
+      const pcResult = getResult("Protein C Activity") || getResult("Protein C Antigen") || getResult("Protein C");
+      const psResult = getResult("Protein S Activity") || getResult("Protein S Free Ag") || getResult("Protein S Antigen") || getResult("Protein S");
+      const at3Result = getResult("AT3 Activity") || getResult("Antithrombin III Activity") || 
+                        getResult("Antithrombin III Ag") || getResult("AT3 Antigen") || 
+                        getResult("Antithrombin III") || getResult("AT3");
+      
+      const pc = classifyNumeric(pcResult);
+      const ps = classifyNumeric(psResult);
+      const at3 = classifyNumeric(at3Result);
+      
+      if (pc === "missing" && ps === "missing" && at3 === "missing") return "";
+      
+      // Check for warfarin interference (WCS) - WCS is Warfarin-specific only
+      const anticoags = context.anticoagulants || [];
+      const hasWarfarin = anticoags.includes("warfarin");
+      
+      if (hasWarfarin && (pcResult || psResult)) {
+        const wcsText = commentData["WCS"] || "";
+        if (wcsText) {
+          return resolvePlaceholders(wcsText, context);
+        }
+      }
+      
+      // All normal
+      if (pc === "normal" && ps === "normal" && at3 === "normal") {
+        return commentData["N1"] || commentData["N2"] || "Protein C, protein S, and antithrombin III activity are normal.";
+      }
+      
+      // Combined decreases
+      if (pc === "low" && ps === "low" && at3 === "low") {
+        const text = commentData["CSAL"] || "Protein C, protein S, and antithrombin III are decreased.";
+        return resolvePlaceholders(text, context);
+      }
+      
+      if (pc === "low" && ps === "low") {
+        return commentData["CSL"] || "Protein C and protein S are decreased.";
+      }
+      
+      if (ps === "low" && at3 === "low") {
+        return commentData["SAL"] || "Protein S and antithrombin III are low.";
+      }
+      
+      if (pc === "low" && at3 === "low") {
+        const text = commentData["CAL2"] || "Protein C and antithrombin III are decreased.";
+        return resolvePlaceholders(text, context);
+      }
+      
+      // Single abnormalities - need to mention normals too if present
+      const parts = [];
+      if (pc === "low") {
+        parts.push(commentData["CL"] || "Protein C is decreased.");
+      } else if (pc === "normal" && (ps === "low" || at3 === "low")) {
+        parts.push("Protein C activity is normal.");
+      }
+      
+      if (ps === "low") {
+        const text = commentData["SL3"] || "Protein S is decreased.";
+        parts.push(resolvePlaceholders(text, context));
+      } else if (ps === "normal" && (pc === "low" || at3 === "low")) {
+        parts.push("Protein S activity is normal.");
+      }
+      
+      if (at3 === "low") {
+        const text = commentData["LAH"] || commentData["LAHU"] || "Antithrombin III is low.";
+        parts.push(resolvePlaceholders(text, context));
+      } else if (at3 === "normal" && (pc === "low" || ps === "low")) {
+        parts.push("Antithrombin III activity is normal.");
+      }
+      
+      return parts.join(" ");
+    }
+    
+    function buildSection4_FVL(results, testMap, getResult, context) {
+      const fvlResult = getResult("Act Protein C Resistance (confirm)");
+      if (!fvlResult) return "";
+      
+      const fvlStatus = classifyBinary(fvlResult);
+      if (fvlStatus === "negative") {
+        return commentData["FVL1"] || "The activated protein C resistance assay is normal, indicating that there is no laboratory evidence for the factor V Leiden mutation.";
+      } else if (fvlStatus === "positive") {
+        return commentData["FVL2"] || "This patient has activated protein C resistance (APCR) due to heterozygosity for the factor V Leiden mutation.";
+      }
+      return "";
+    }
+    
+    function inferLAPositive(results, testMap, getResult) {
+      const drvvtResult = getResult("DRVVT (screen)") || getResult("DRVVT (confirm)") || getResult("DRVVT");
+      const laResult = getResult("Lupus anticoagulant (screen)");
+      
+      if (drvvtResult && classifyBinary(drvvtResult) === "positive") return true;
+      if (laResult && classifyBinary(laResult) === "positive") return true;
+      return false;
+    }
+    
+    function anyAPLPositive(results, testMap, getResult) {
+      const aclIgG = getResult("Cardiolipin Ab, IgG");
+      const aclIgM = getResult("Cardiolipin Ab, IgM");
+      const b2gpIgG = getResult("B2 glycoprotein 1 Ab, IgG");
+      const b2gpIgM = getResult("B2 glycoprotein 1 Ab, IgM");
+      
+      const tests = [aclIgG, aclIgM, b2gpIgG, b2gpIgM];
+      for (const test of tests) {
+        if (test) {
+          const status = test.status || "";
+          // Only ELEVATED (≥40) counts toward APS - MODERATE (<40) does not
+          if (status === "ELEVATED") return true;
+        }
+      }
+      return false;
+    }
+    
+    function buildSection5_LA_DRVVT_APL(results, testMap, getResult, context) {
+      const drvvtResult = getResult("DRVVT (screen)") || getResult("DRVVT (confirm)") || getResult("DRVVT");
+      const laResult = getResult("Lupus anticoagulant (screen)");
+      const aclIgG = getResult("Cardiolipin Ab, IgG");
+      const aclIgM = getResult("Cardiolipin Ab, IgM");
+      const b2gpIgG = getResult("B2 glycoprotein 1 Ab, IgG");
+      const b2gpIgM = getResult("B2 glycoprotein 1 Ab, IgM");
+      
+      const drvvtStatus = drvvtResult ? classifyBinary(drvvtResult) : "missing";
+      const laStatus = laResult ? classifyBinary(laResult) : "missing";
+      
+      // Check if all aPL are negative or missing
+      const allAPLNegative = (!aclIgG || aclIgG.status === "NEGATIVE" || !aclIgG.status) &&
+                             (!aclIgM || aclIgM.status === "NEGATIVE" || !aclIgM.status) &&
+                             (!b2gpIgG || b2gpIgG.status === "NEGATIVE" || !b2gpIgG.status) &&
+                             (!b2gpIgM || b2gpIgM.status === "NEGATIVE" || !b2gpIgM.status);
+      
+      // Prefer exact combined phrases if applicable
+      if (drvvtStatus === "negative" && laStatus === "negative" && allAPLNegative) {
+        // Check if any aPL tests were actually performed
+        const hasAPLTests = aclIgG || aclIgM || b2gpIgG || b2gpIgM;
+        if (hasAPLTests) {
+          return commentData["NN2"] || "The PTT-LA and DRVVT screens are negative for a lupus anticoagulant.  The IgM/IgG anticardiolipin antibodies and IgM/IgG anti-beta2-glycoprotein I antibodies are not elevated.";
+        } else {
+          return commentData["NN1"] || "The PTT-LA and DRVVT screening tests are negative for a lupus anticoagulant.";
+        }
+      }
+      
+      const parts = [];
+      
+      // Special case: NODV when DRVVT uninterpretable and LA negative
+      const anticoags = context.anticoagulants || [];
+      const hasInterferingAnticoag = anticoags.some(ac => 
+        ["warfarin", "apixaban", "rivaroxaban"].includes(ac)
+      );
+      
+      if (drvvtStatus === "uninterpretable" && laStatus === "negative" && hasInterferingAnticoag) {
+        const nodvText = commentData["NODV"] || "";
+        if (nodvText) {
+          return resolvePlaceholders(nodvText, context);
+        }
+      }
+      
+      // Individual components
+      if (laResult) {
+        if (laStatus === "negative") {
+          parts.push(commentData["L1"] || "The PTT-LA lupus anticoagulant screen is negative.");
+        } else if (laStatus === "uninterpretable") {
+          const l2Text = commentData["L2"] || "The PTT-LA screen is uninterpretable.";
+          // For L2, need to determine hexagonal phase confirmatory result
+          // Look for hexagonal phase confirmatory test
+          const hexConfirmResult = getResult("Hexagonal Phase") || getResult("PTT-LA (confirm)") || getResult("Lupus Anticoagulant (confirm)");
+          const hexConfirmStatus = hexConfirmResult ? classifyBinary(hexConfirmResult) : null;
+          // Use hexagonal phase result or overall LA status as fallback
+          const confirmContext = { ...context, testResult: hexConfirmStatus || laStatus };
+          parts.push(resolvePlaceholders(l2Text, confirmContext, "L2"));
+        }
+      }
+      
+      if (drvvtResult) {
+        if (drvvtStatus === "negative") {
+          parts.push(commentData["D1"] || "The DRVVT test is NEGATIVE for a lupus anticoagulant.");
+        } else if (drvvtStatus === "positive") {
+          parts.push(commentData["D2"] || "The DRVVT test is POSITIVE for a lupus anticoagulant.");
+        } else if (drvvtStatus === "uninterpretable") {
+          const duText = commentData["DU"] || "The DRVVT test cannot be interpreted.";
+          parts.push(resolvePlaceholders(duText, context));
+        }
+      }
+      
+      // aPL antibodies
+      const aplParts = [];
+      if (aclIgG) {
+        const status = aclIgG.status || "";
+        if (status === "MODERATE") aplParts.push("IgG anticardiolipin antibody");
+        if (status === "ELEVATED") aplParts.push("IgG anticardiolipin antibody");
+      }
+      if (aclIgM) {
+        const status = aclIgM.status || "";
+        if (status === "MODERATE") aplParts.push("IgM anticardiolipin antibody");
+        if (status === "ELEVATED") aplParts.push("IgM anticardiolipin antibody");
+      }
+      if (b2gpIgG) {
+        const status = b2gpIgG.status || "";
+        if (status === "MODERATE") aplParts.push("IgG anti-beta2-glycoprotein I antibody");
+        if (status === "ELEVATED") aplParts.push("IgG anti-beta2-glycoprotein I antibody");
+      }
+      if (b2gpIgM) {
+        const status = b2gpIgM.status || "";
+        if (status === "MODERATE") aplParts.push("IgM anti-beta2-glycoprotein I antibody");
+        if (status === "ELEVATED") aplParts.push("IgM anti-beta2-glycoprotein I antibody");
+      }
+      
+      if (aplParts.length > 0) {
+        const hasModerate = [aclIgG, aclIgM, b2gpIgG, b2gpIgM].some(t => t && t.status === "MODERATE");
+        const hasElevated = [aclIgG, aclIgM, b2gpIgG, b2gpIgM].some(t => t && t.status === "ELEVATED");
+        
+        if (hasModerate) {
+          const text = commentData["ABM"] ? commentData["ABM"].replace("{antibody}", aplParts.filter((_, i) => {
+            const test = [aclIgG, aclIgM, b2gpIgG, b2gpIgM][i];
+            return test && test.status === "MODERATE";
+          }).join("; ")) : "";
+          if (text) parts.push(text);
+        }
+        if (hasElevated) {
+          const text = commentData["ABH"] ? commentData["ABH"].replace("{antibody}", aplParts.filter((_, i) => {
+            const test = [aclIgG, aclIgM, b2gpIgG, b2gpIgM][i];
+            return test && test.status === "ELEVATED";
+          }).join("; ")) : "";
+          if (text) parts.push(text);
+        }
+      } else if (allAPLNegative && (aclIgG || aclIgM || b2gpIgG || b2gpIgM)) {
+        parts.push(commentData["ABNORM"] || "The anticardiolipin antibody and anti-beta2-glycoprotein I antibodies are not elevated.");
+      }
+      
+      // APS add-on if positive
+      const laPos = inferLAPositive(results, testMap, getResult);
+      const aplPos = anyAPLPositive(results, testMap, getResult);
+      if (laPos || aplPos) {
+        parts.push(commentData["APS"] || "");
+      }
+      
+      // Heparin removal note (LH) - if heparin detected and LA tests performed
+      const hasHeparin = (context.anticoagulants || []).includes("heparin");
+      if (hasHeparin && (laResult || drvvtResult)) {
+        parts.push(commentData["LH"] || "");
+      }
+      
+      return parts.filter(p => p && p.trim()).join(" ");
+    }
+    
+    function buildSection6_Molecular(results, testMap, getResult, context) {
+      const g20210aResult = getResult("G20210A Gene mutation");
+      if (!g20210aResult) return "";
+      
+      const status = classifyBinary(g20210aResult);
+      if (status === "negative") {
+        return commentData["PTG1"] || "An assay for the prothrombin mutation G20210A is normal.";
+      } else if (status === "unknown" && g20210aResult.status === "PENDING") {
+        return commentData["PTG2"] || "An assay for prothrombin G20210A is pending at this time.";
+      }
+      return "";
+    }
+    
+    // ===== MAIN COMMENT GENERATOR =====
+    
+    // Code database with triggers - parsed from CSV
+    const codeDatabase = {};
+    
+    // Code database - hardcoded from FINAL CSV
+    function initializeCodeDatabase() {
+      return {
+        "1A": { 
+          content: "1. The PT and PTT are normal."
+        },
+        "1B": {
+          content: "1. The PT and PTT are prolonged. Common causes of combined PT and PTT prolongations like this include warfarin, liver dysfunction, vitamin K deficiency, or (if clinically suspected) disseminated intravascular coagulation (DIC).  However, if the patient is not on warfarin and the PT and PTT prolongations are persistent and unexplained, a prolonged PT/PTT panel can be performed on this specimen by request."
+        },
+        "1C": {
+          content: "1. The PT is prolonged and the PTT is normal. Common causes of PT prolongations include warfarin, liver dysfunction, vitamin K deficiency, or (if clinically suspected) disseminated intravascular coagulation (DIC).  However, if the patient is not on warfarin and the PT prolongation is persistent and unexplained, a prolonged PT panel can be performed on this specimen by request. Note that the PT reagent contains a heparin neutralizer, so heparin does not cause an elevated PT."
+        },
+        "1D": {
+          content: "1. The PTT is prolonged.  Neither heparin nor a lupus anticoagulant are detected.  If requested, PTT factor assays can be performed on this specimen to identify the cause of the prolonged PTT. The PT is normal."
+        },
+        "L1": {
+          content: "The PTT-LA lupus anticoagulant screen is negative."
+        },
+        "L2": {
+          content: "The PTT-LA screen is uninterpretable due to {apixaban;rivaroxaban}.  The confirmatory hexagonal phase assay is {negative;positive}.  Taken together, the result is {negative;positive} for a lupus anticoagulant."
+        },
+        "D1": {
+          content: "The DRVVT test is NEGATIVE for a lupus anticoagulant."
+        },
+        "D2": {
+          content: "The DRVVT test is POSITIVE for a lupus anticoagulant."
+        },
+        "DU": {
+          content: "The DRVVT test cannot be interpreted in the context of {apixaban;rivaroxaban;warfarin}."
+        },
+        "N1": {
+          content: "Protein C, protein S, and antithrombin III activity are normal."
+        },
+        "N2": {
+          content: "Protein C, protein S, and antithrombin III activity are normal."
+        },
+        "APS": {
+          content: "The diagnosis of antiphospholipid antibody syndrome (APLAS) requires at least one positive antiphospholipid antibody test (e.g., positive hexagonal phase PTT-LA OR positive DRVVT OR anticardiolipin/anti-beta2-glycoprotein I) as well as thrombosis or pregnancy complications. Persistently positive tests and proximity to the clinical event increase the likelihood of APLAS. If clinically indicated, repeat testing at least 12 weeks from the positive result. For updated criteria please see PMID 37635643.",
+        },
+        "ABM": {
+          content: "The {IgM anticardiolipin antibody; IgG anticardiolipin antibody; IgM anti-beta2-glycoprotein I antibody; IgG anti-beta2-glycoprotein I antibody} is moderately elevated. Although this value is above the reference range, values under 40 do not count toward the diagnosis of antiphospholipid antibody syndrome. For updated criteria please see PMID 37635643. {IgM anticardiolipin antibody; IgG anticardiolipin antibody; IgM anti-beta2-glycoprotein I antibody; IgG anti-beta2-glycoprotein I antibody} {is; are} normal.",
+        },
+        "ABH": {
+          content: "The {IgM anticardiolipin antibody; IgG anticardiolipin antibody; IgM anti-beta2-glycoprotein I antibody; IgG anti-beta2-glycoprotein I antibody} is markedly elevated. Positive anticardiolipin and/or anti-beta2-glycoprotein I values are considered titers of 40 and above. {IgM anticardiolipin antibody; IgG anticardiolipin antibody; IgM anti-beta2-glycoprotein I antibody; IgG anti-beta2-glycoprotein I antibody} {is;are} normal.",
+        },
+        "ABNORM": {
+          content: "The anticardiolipin antibody and anti-beta2-glycoprotein I antibodies are not elevated.",
+        },
+        "NN1": {
+          content: "The PTT-LA and DRVVT screening tests are negative for a lupus anticoagulant."
+        },
+        "NN2": {
+          content: "The PTT-LA and DRVVT screens are negative for a lupus anticoagulant.  The IgM/IgG anticardiolipin antibodies and IgM/IgG anti-beta2-glycoprotein I antibodies are not elevated."
+        },
+        "NN3": {
+          content: "1. The PT and PTT are normal.\n\n2. The PTT-LA and DRVVT screens are negative for a lupus anticoagulant.  The IgG and IgM anticardiolipin antibodies and the IgG and IgM anti-beta2-glycoprotein I antibodies are not elevated.",
+        },
+        "WCS": {
+          content: "Protein C and S activities cannot be interpreted because of {rivaroxaban, apixaban, warfarin} exposure. If there is interest in determining if the patient has a hereditary deficiency of protein C or protein S, it will be necessary to evaluate the patient after therapy has been discontinued for at least 20 days and when the PT is normal (without plasma transfusion).",
+        },
+        "NODV": {
+          content: "Note that the lupus anticoagulant panel is incomplete because the DRVVT cannot be interpreted due to {rivaroxaban, apixaban, warfarin} interference.",
+        },
+        "LH": {
+          content: "Lupus anticoagulant tests were performed after removal of heparin from the specimen.",
+        },
+        "FDLA": {
+          content: "The PTT is likely prolonged due to a lupus anticoagulant in this specimen.",
+        },
+        "FD": {
+          content: "Given the findings below, the PTT is likely to be prolonged due to a combination of lupus anticoagulant and factor deficiency {VIII/IX,X,XI,XIII}.",
+        },
+        "LA": {
+          content: "Given the findings below, the PTT is likely to be prolonged due to factor deficiency {VIII/IX,X,XI,XIII}.",
+        },
+        "ECMOHEP": {
+          content: "The PT and PTT are prolonged in this acutely ill patient on ECMO and heparin.",
+        },
+        "FACINH": {
+          content: "The corrects {PT;PTT} in a mixing study at T0 *** sec, but is prolonged at T120 *** sec. These results are most commonly seen with a factor {V;VIII} inhibitor.",
+        },
+        "PTLUP": {
+          content: "Occasionally, lupus anticoagulants can prolong the PT by decreasing factor II or by artifactually interfering with the PT assay.",
+        },
+        "PTMC": {
+          content: "The PT corrected in a mixing study, which is consistent with factor deficiency (see below)*",
+        },
+        "PTND": {
+          content: "The PT mix was credited because the PT was not prolonged 3 seconds from the normal range.",
+        },
+        "PTTDEF": {
+          content: "The PTT corrects in a mixing study at T0 *** sec and does not substantially change at T120 min *** sec, consistent with factor deficiency.",
+        },
+        "PTTINH": {
+          content: "The PTT fails to correct with a mixing study at T0 and T120.  This is most consistent with a factor inhibitor (see below)",
+        },
+        "MIXLA": {
+          content: "The PTT does not correct in a mixing study at T0 *** sec and increases slightly at T120 *** sec.  This is most consistent with a non-specific inhibitor, such as lupus, although it does not rule out a specific factor inhibitor.",
+        },
+        "PTTND": {
+          content: "The PTT mix was credited because the PTT was not prolonged 5 seconds from the normal range.",
+        },
+        "RTS": {
+          content: "The reptilase time is essentially normal, in that it is not prolonged.  Rarely, dysfibrinogenemia can have shortened reptilase times.",
+        },
+        "TTL": {
+          content: "The thrombin time is prolonged.  This is not due to heparin because the thrombin time remains prolonged after treating the specimen with an enzyme that degrades heparin.  Fibrinogen is *** mg/dl.  If the purpose of the study was to assess for dysfibrinogenemia, the thrombin time can be repeated any time when the FDP is normal.  If the purpose of the study was part of a DIC screen, the thrombin time prolongations of DIC are typically attributed to the positive FDP and/or low fibrinogen.",
+        },
+        "TTS": {
+          content: "The thrombin time is essentially normal, in that it is not prolonged.  Rarely, dysfibrinogenemia can have shortened thrombin times.",
+        },
+        "DABOK": {
+          content: "The dilute thrombin time is prolonged, suggesting therapeutic dabigatran.  The time of the last dose prior to specimen collection can be helpful to further determine if the dabigatran level is appropriate, but the overall range from trough to peak is estimated at 49-131 seconds.",
+        },
+        "DABHI": {
+          content: "The dilute thrombin time is prolonged, suggesting possible SUPRAtherapeutic dabigatran.  This can occur with renal dysfunction, or if heparin has contaminated the specimen (eg. from a line or during the blood draw).",
+        },
+        "DABLO": {
+          content: "The dilute thrombin time is prolonged, suggesting possible SUBtherapeutic dabigatran.  If this specimen was not drawn at the peak (approximately 2 hours after a dose), consider repeating the test on a specimen that is collected 2 hours after a dose.",
+        },
+        "ARGOK": {
+          content: "The dilute thrombin time is prolonged, consistent with the patient's reported argatroban therapy.  The results suggest a therapeutic level of argatroban.",
+        },
+        "ARGHI": {
+          content: "The dilute thrombin time is prolonged, suggesting possible SUPRAtherapeutic argatroban.  This can occur with liver dysfunction, or if heparin has contaminated the specimen (eg. from a line or during the blood draw).",
+        },
+        "ARGLO": {
+          content: "The dilute thrombin time is prolonged, suggesting possible SUBtherapeutic argatroban.",
+        },
+        "FN": {
+          content: "The fibrinogen is normal.",
+        },
+        "FH": {
+          content: "The fibrinogen is elevated at ***.  Fibrinogen becomes elevated during acute phase reactions.",
+        },
+        "FHV": {
+          content: "The fibrinogen is elevated at ***.  Fibrinogen becomes elevated during acute phase reactions.  The VWF reported in this specimen may be somewhat higher than baseline due to an acute phase reaction.",
+        },
+        "MFA": {
+          content: "In patients receiving Altuviiio, the true factor VIII level is underestimated by our clot-based assays and overestimated by chromogenic assays; however, exact correction values have shown variability in clinical practice and are currently not well defined.",
+        },
+        "BIVAL": {
+          content: "The dilute thrombin time was *** seconds.  The therapeutic range on bivalirudin is not well-known but may be approximately 48-130 seconds (a more conservative range would be 60-90 seconds).  In patients with a lupus anticoagulant, the therapeutic range might be 58-140 seconds (a more conservative range might be 70-100).",
+        },
+        "WRT": {
+          content: "If there is an interest in determining if the patient is hypercoagulable on the basis of activated protein C resistance (Factor V Leiden), the appropriate assay to order is activated protein C resistance.",
+        },
+        "TFN": {
+          content: "Note that this patient was recently transfused, which could affect these results.",
+        },
+        "PFH": {
+          content: "The prothrombin fragment 1 + 2 is slightly above the reference range. Prothrombin fragment 1 + 2 is produced when prothrombin (factor II) is converted to thrombin (factor IIa), an essential step in the clotting process. Thus, increases in prothrombin fragment 1 + 2 can be observed in conditions associated with active thrombosis (e.g., deep vein thrombosis, pulmonary embolism, disseminated intravascular coagulation, preeclampsia, trauma) and in hypercoagulable states (e.g., antithrombin III deficiency). Decreases in prothrombin fragment 1 + 2 can occur in patients undergoing anticoagulation therapy (e.g., with warfarin: PMID 7831679). Correlation with the patient's clinical status and other markers of thrombosis, such as D-dimer, is recommended.",
+        },
+        "PFN": {
+          content: "The prothrombin fragment 1 + 2 is normal.",
+        },
+        "VN1": {
+          content: "Von Willebrand factor antigen, von Willebrand factor activity, and factor VIII activity are within the reference ranges. There is no laboratory evidence for von Willebrand disease. Note that inflammatory states or pregnancy can increase von Willebrand factor and factor VIII levels, thus obscuring the diagnosis of hereditary von Willebrand disease. Clinical correlation is advised.",
+        },
+        "VN2": {
+          content: "Von Willebrand factor antigen, von Willebrand factor activity, and factor VIII activity are within the reference ranges. The patient has a history of von Willebrand disease. Note that inflammatory states or pregnancy can increase von Willebrand factor and factor VIII levels, thus obscuring the diagnosis of hereditary von Willebrand disease. Clinical correlation is advised.",
+        },
+        "ABOCOAG": {
+          content: "The blood type of this patient is {A ; B; AB; O} obtained by {chart review; front type only}. Type O individuals typically have lower levels of VWF.",
+        },
+        "DN": {
+          content: "Von Willebrand factor antigen, von Willebrand factor activity, and factor VIII activity are {within; above} the reference ranges. The patient has a history of von Willebrand disease and has been treated with desmopressin. Clinical correlation is advised.",
+        },
+        "PN": {
+          content: "Von Willebrand factor antigen, von Willebrand factor activity, and factor VIII activity are {within; above} the reference ranges. The patient has a history of von Willebrand disease and has been treated with {VWF concentrate, desmopressin}. Clinical correlation is advised.",
+        },
+        "INF": {
+          content: "Von Willebrand factor antigen, von Willebrand factor activity, and factor VIII activity are above the reference ranges. These findings are consistent with an acute inflammatory condition. There is no laboratory evidence for von Willebrand disease. Note that inflammatory states or pregnancy can increase von Willebrand factor and factor VIII levels, thus obscuring the diagnosis of hereditary von Willebrand disease. Clinical correlation is advised.",
+        },
+        "DHR": {
+          content: "Von Willebrand factor antigen, von Willebrand factor activity, and factor VIII activity are {within; above} the reference ranges approximately {one hour; four hours} after receiving desmopressin. Desmopressin responsiveness is defined as an increase of at least >2 times the baseline VWF activity level and a sustained increase of both VWF and factor VIII (FVIII) levels >50 IU/dL for at least 4 hours (Blood Adv. 2021 Jan 26;5(2):565-569. PMID: 33496750). Clinical correlation is advised.",
+        },
+        "3050A": {
+          content: "Reduced levels of von Willebrand antigen, and von Willebrand activity. The FVIII is {reduced;normal}. VWF levels between 30-50 IU/dL may be consistent with type 1 von Willebrand disease if there is a concurrent bleeding phenotype; however, the VWF:Act to VWF:Ag ratio is < 0.7 in this patient raises the possibility of type 2 von Willebrand disease (Blood Adv. 2021 Jan 12;5(1):280-300. PMID: 33570651). Repeat or additional studies, including correlation with VWF:GPIbM and/or VWF multimer analysis, are recommended to fully characterize and subtype if not already done previously. Clinical correlation is advised. Note that inflammatory states or pregnancy can increase factor VIII activity and von Willebrand levels, thus obscuring the diagnosis of hereditary von Willebrand disease.",
+        },
+        "3050N": {
+          content: "Reduced levels of von Willebrand antigen, and von Willebrand activity. The FVIII is {reduced;normal}. VWF levels between 30-50 IU/dL may be consistent with type 1 von Willebrand disease if there is a concurrent bleeding phenotype. Repeat or additional studies, including correlation with VWF:GPIbM and/or VWF multimer analysis, are recommended to fully characterize and subtype if not already done previously. Clinical correlation is advised. Note that inflammatory states or pregnancy can increase factor VIII activity and von Willebrand levels, thus obscuring the diagnosis of hereditary von Willebrand disease.",
+        },
+        "LOW1": {
+          content: "Reduced levels of factor VIII activity, von Willebrand antigen, and von Willebrand activity, and the VWF:Act to VWF:Ag ratio is >= 0.7, consistent with type 1 von Willebrand disease. Repeat or additional studies are recommended if clinically indicated. Clinical correlation is advised.",
+        },
+        "LOW2": {
+          content: "Reduced levels of factor VIII activity, von Willebrand antigen, and von Willebrand activity, with a VWF:Act to VWF:Ag ratio < 0.7, raising the possibility of type 2 von Willebrand disease. Repeat or additional studies, including correlation with VWF:GPIbM and/or VWF multimer analysis, are recommended to fully characterize and subtype if not already done previously. Clinical correlation is advised.",
+        },
+        "LOW3": {
+          content: "Reduced levels of factor VIII activity, von Willebrand antigen, and von Willebrand activity, with a FVIII to VWF:Ag ratio < 0.7, raising the possibility of type 2N von Willebrand disease. Repeat or additional studies, including correlation with VWF:FVIIIB and/or genetic testing, are recommended to fully characterize and subtype if not already done previously. Clinical correlation is advised.",
+        },
+        "RATIO": {
+          content: "Normal levels of Factor VIII, von Willebrand antigen, and von Willebrand activity levels with an activity to an levels with a VWF:Ag ratio of ***,  raising the possibility of acquired in the context of of the patient's known {Waldenström macroglobulinemia; thrombocythemia; aortic stenosis; requirement for ECMO/mechanical circulatory support}.",
+        },
+        "ACQ": {
+          content: "Reduced levels of factor VIII activity, von Willebrand antigen, and von Willebrand activity. In the setting of the patient's known {Waldenström macroglobulinemia; thrombocythemia; aortic stenosis; requirement for ECMO/mechanical circulatory support}, the findings are consistent with an acquired von Willebrand syndrome, although a hereditary von Willebrand disease cannot be ruled out. Correlation with VWF multimer analysis is recommended if not previously performed.",
+        },
+        "NEO": {
+          content: "Von Willebrand factor is typically elevated above a patient's baseline at birth, decreasing to baseline by age 6 months.  Therefore, repeat testing can be performed after age 6 months, if indicated, to determine if the values are lower than they are currently.",
+        },
+        "10L": {
+          content: "Causes of decreased factor X include warfarin, vitamin K deficiency, liver dysfunction, DIC, amyloidosis, and a hereditary deficiency.  If the patient has been receiving warfarin recently, the value for factor X does not reflect the patient's true baseline level.  Factor X is one of the last vitamin K dependent factors to return to normal levels following cessation of warfarin therapy or administration of vitamin K.",
+        },
+        "10A": {
+          content: "Factor X is  {low; normal; above the reference range}. Factor X deficiency is the most common coagulation factor deficiency in patients with AL amyloidosis (see PMID: 11238135).",
+        },
+        "VW8": {
+          content: "Factor VIII activity below the reference range in a patient with known von Willebrand disease.",
+        },
+        "VK": {
+          content: "The factor assays, PT, and PTT results are most suggestive of warfarin use or vitamin K deficiency.",
+        },
+        "PTTHI": {
+          content: "If the factor VIII, IX, or XI assays were ordered to assess for hypercoagulability, one study found that factor IX levels above 129% or factor XI >= 121% had a 2-3 fold increased odds ratio for venous thrombosis (PMID: 10845896).  Another study found that patients with venous thrombosis and factor VIII  above 234% had a 6.7 fold increased relative risk for recurrent thrombosis (PMID: 10950667).",
+        },
+        "NEOCOAG": {
+          content: "Neonatal coagulation factor activity levels vary widely (PMID: 34752018), hence it is difficult to draw conclusions about hereditary deficiency based on a single time point. Recommend repeat studies in six months. Clinical correlation is advised.",
+        },
+        "HL": {
+          content: "Chromogenic FVIII is *** %in this patient on emicizumab. Clot-based FVIII is *** %. In patients on emicizumab, the chromogenic FVIII measures either endogenously produced or administered FVIII and does not measure the effect of emicizumab. For this reason, there may be a discordance between the single-stage clot-based FVIII level, which does measure the effect of emicizumab, and the chromogenic FVIII.",
+        },
+        "HBP": {
+          content: "Factor IX activity is within the reference range in a patient with known hemophilia B {who is receiving; who recently received} factor IX concentrate.",
+        },
+        "HAP": {
+          content: "Factor VIII is *** % in this patient with known hemophilia A who is receiving {advate; jivi; eloctate; recombinant FVIII}",
+        },
+        "HA": {
+          content: "The PTT is markedly elevated. There is no evidence for the presence of heparin or a lupus anticoagulant in the specimen. Factor VIII is less than 1%. The mixing study shows no evidence for a factor VIII inhibitor. These results are most consistent with hemophilia A. Other possibilities, such as severe type 3 VWD, are less likely.",
+        },
+        "FXA": {
+          content: "The values for the factor studies should be interpreted in the context of {apixaban;rivaroxaban;warfarin} exposure, which may cause artificially low factor level results. Therefore, the level is at least as high as the number reported (as denoted by a  > > sign in the result).",
+        },
+        "FLUP": {
+          content: "The factor levels increase with dilution in this specimen, which is likely to be due to the lupus anticoagulant.  If the result never reached linearity, it is reported with a > sign.  The factor activity is as high or higher than the number reported.",
+        },
+        "FC": {
+          content: "The factor assays, PT, and PTT results are most suggestive of warfarin use or vitamin K deficiency.",
+        },
+        "CXT": {
+          content: "Chromogenic X is typically used to monitor warfarin in a patient in whom the INR is unreliable due to a lupus anticoagulant.  This level of Chromogenic X suggests {an INR of approximately 2-3; subtherapeutic warfarin; an INR>3}",
+        },
+        "ATI": {
+          content: "This patient is on efanesoctocog alfa (Altuviiio), and it is assumed that there are no other FVIII present. Chromogenic FVIII is ***, which is likely an overestimate.  In-house testing with Altuviiio standards suggests that the true value can be estimated by dividing the chromogenic value by 2.5 or by dividing the clot-based factor by 0.6. Over time, the uncorrected chromogenic and clot-based values converge. Pharmakokinetics may vary by indivicual.",
+        },
+        "8H": {
+          content: "Factor VIII is elevated at *** %.  Factor VIII becomes elevated during acute phase reactions.  If the purpose of this assay was to exclude DIC, it can be noted that a normal or elevated factor VIII does not by itself exclude DIC, if DIC is clinically suspected.  On the other hand, a decreased factor VIII would be suggestive of DIC, if DIC were clinically suspected.",
+        },
+        "7L": {
+          content: "Reduced factor VII activity, which may represent warfarin administration, vitamin K deficiency, liver disease, or (rarely) a hereditary deficiency.",
+        },
+        "7HP": {
+          content: "Factor VII activity levels are above the reference range in this pregnant patient, consistent with physiologic increase in factor VII during pregnancy (PMID 20174768).",
+        },
+        "13U": {
+          content: "The factor XIII screening assay is normal.  However, the screening assay detects only severe deficiencies, and may remain above baseline 1-3 months after transfusion.",
+        },
+        "13C": {
+          content: "Factor XIII antigen is low, which can be due to liver dysfunction, consumption (disseminated intravascular coagulation, ECMO, surgery, or thrombosis, inflammatory bowel diseases, medications such as valproate and tocilizumab, or other conditions. Factor XIII levels are usually 20-70% or higher in these conditions.  Hereditary deficiency is very rare.  A prior urea clot-based assay was normal, which helps to rule out severe congenital FXIII deficiency.",
+        },
+        "13A": {
+          content: "The FXIII antigen is normal.   A prior urea clot-based assay was normal, which helps to rule out severe congenital FXIII deficiency.",
+        },
+        "11L": {
+          content: "Factor XI is decreased.   Acquired decreases in factor XI can arise secondary to proteinuria (such as in nephrotic syndrome) or pregnancy, or can also be an artifact from a lupus anticoagulant.  Alternatively, this level could be consistent with a hereditary factor XI deficiency. Hereditary factor XI deficiencies are most common in individuals of Ashkenazi Jewish descent.  Individuals with hereditary deficiency might have a bleeding tendency, particularly if there is a positive personal or family history of bleeding.  Many hereditary factor XI deficiencies are also asymptomatic.  If bleeding is present, it is often mild.  If indicated, the factor XI can be repeated on a fresh specimen to determine if the level is reproducible.  This level of factor XI may or may not prolong the PTT, depending on the sensitivity of the PTT reagent.",
+        },
+        "12L": {
+          content: "Factor XII is below the reference range.  Factor XII deficiencies do not cause an increased risk for bleeding and do not require treatment.",
+        },
+        "11L2": {
+          content: "Factor XI is markedly decreased.  Acquired decreases in factor XI can arise secondary to proteinuria (such as in nephrotic syndrome) or pregnancy, or can also be an artifact from a lupusanticoagulant.  Alternatively, this level is consistent with a hereditary factor XI deficiency.  Factor XI deficiencies are most common in individuals of Ashkenazi Jewish descent. This level of factor XI deficiency is likely to have an increased risk of bleeding, particularly if there is a positive personal or family history of bleeding.  If clinically indicated, it is suggested to repeat the factor XI level to confirm the presence of an abnormality. Taken together, this patient has a prolonged PTT on the basis of a decreased level of factor XI.",
+        },
+        "1112L": {
+          content: "The PTT is prolonged at *** seconds.  To evaluate the prolonged PTT, a lupus anticoagulant assay and PTT-related factor assays were performed.  The lupus anticoagulant assay was negative.  PTT-related factor assays reveal decreased factors XI and XII, which accounts for the PTT prolongation.  Factor XII deficiencies do not cause an increased risk for bleeding and do not require treatment.  The combination of low values for factors XI and XII is associated with loss of these factors in the urine (proteinuria).  Thus a urinalysis for urine protein may be informative.  Hereditary factor XII deficiencies are relatively common, and hereditary factor XI deficiencies are common among persons of Ashkenazi Jewish descent.  Therefore, the presence of two hereditary deficiencies may also be considered if relevant.",
+        },
+        "13N": {
+          content: "The factor XIII screening assay is normal.  However, the screening assay detects only severe deficiencies. The FXIII antigen, which is more sensitive to quantitative deficiency, is also normal.  Note that exogenous provision of factor XIII via transfusion of plasma-containing products within the past 1-3 months can obscure detection of underlying deficiency.",
+        },
+        "PTLUPRO": {
+          content: "Occasionally, lupus anticoagulants can prolong the PT by decreasing factor II or by artifactually interfering in the PT assay.",
+        },
+        "NOX": {
+          content: "An anti-Xa assay is negative for Xa-inhibiting anticoagulants.",
+        },
+        "XA": {
+          content: "An Anti-Xa assay detects an anticoagulant, presumably {apixaban; rivaroxaban,heparin} *** at  IU/mL.",
+        },
+        "DXA": {
+          content: "An Anti-Xa assay detects an anticoagulant, presumably {apixaban; rivaroxaban} at *** IU/mL. {apixaban; rivaroxaban}  exposure can prolong the PT and, to a lesser extent, the PTT.",
+        },
+        "L4": {
+          content: "The PTT-LA lupus anticoagulant assay required confirmation by a second assay because it was initially prolonged {and did not correct; but corrected} in a 1:1 mix. The confirmatory hexagonal phase assay is {negative; positive}. Taken together, the results are {negative;positive}  for a lupus anticoagulant.",
+        },
+        "HEXP": {
+          content: "The hexagonal phase confirmation reagent is insensitive to interference from therapeutic concentrations of rivaroxaban, apixaban, and warfarin, and to CRP at levels below 200 mg/L (PMID: 38185483). Heparin, if detected, is removed prior to testing. However, if the patient is receiving dabigatran, argatroban, bivalirudin or hirudin anticoagulation, these anticoagulants can cause false positive lupus anticoagulant tests.",
+        },
+        "NOAB": {
+          content: "If clinically indicated, assays for IgG/IgM anti-beta2-glycoprotein I antibodies and/or IgG/IgM anticardiolipin antibodies can be performed on this specimen by request.",
+        },
+        "APLN": {
+          content: "1. The PT and PTT are within the reference ranges.\n\n2. No evidence of antiphospholipid antibodies. The DRVVT and PTT-LA screens are negative for a lupus anticoagulant. The IgG/IgM anti-beta2 glycoprotein I and IgG/IgM anticardiolipin antibodies are NOT elevated.",
+        },
+        "N3": {
+          content: "Protein C activity is normal. Protein S and antithrombin III activity could not be interpreted because of {apixaban; rivaroxaban} interference.  Free protein S and antithrombin III antigen are normal.  To exclude a type II protein S or antithrombin III deficiency, protein S and antithrombin activity assays can be performed any time when the patient is no longer on {apixaban; rivaroxaban}.",
+        },
+        "CSAL": {
+          content: "Protein S, protein C and antithrombin III are decreased. These results can occur with liver dysfunction or consumption (thrombosis, DIC, or surgery). If relevant, it should be noted that warfarin or vitamin K deficiency decrease protein C and protein S. Heparin can decrease antithrombin III. It is difficult to assess for any underlying hereditary deficiency in these settings. If indicated, the assays can be repeated when the patient has recovered from any current illness and has not received warfarin or heparin for at least 10-20 days.",
+        },
+        "CAL1": {
+          content: "This patient has a prolonged PT and PTT, with abnormal liver function tests. The prolonged PT and PTT could be due to reduced hepatic synthesis of coagulation factors. Protein C, protein S, and antithrombin III are also synthesized in the liver and, therefore, liver disease can result in a low value for these proteins. Other possible contributing factors to consider, if relevant, include disseminated intravascular coagulation (DIC), recent thrombosis or surgery, or combined warfarin/heparin therapy.",
+        },
+        "CAL2": {
+          content: "Protein C and antithrombin III are decreased. These results occur most commonly due to liver dysfunction. Consumption (thrombosis, DIC, or surgery) can also cause these results. If relevant, it should be noted that warfarin or vitamin K deficiency decrease protein C, and heparin can decrease antithrombin III. It is difficult to assess for any underlying hereditary deficiency of one of these proteins in these settings. If indicated, the assays can be repeated when the patient has recovered from any current illness and has not received warfarin or heparin for at least 10 days.",
+        },
+        "SL2": {
+          content: "The value for protein S by functional assay was low with a normal protein S free antigen. Protein S can be decreased by acute phase reactions, estrogen use, pregnancy, or recent (within 20 days) warfarin discontinuation. If none of these conditions are applicable, the functional protein S may reflect the patient's true value, and at this level could represent a hereditary deficiency. If there is interest in excluding the possibility of a hereditary protein S deficiency, protein S assays should be repeated any time when the patient is stable and has not received estrogen or been pregnant for at least 3 months and has not received warfarin for at least 20 days. Alternatively, measuring protein S in first-degree family members or any relative with a history of venous thrombosis may be informative, because hereditary protein S deficiency has autosomal dominant inheritance.",
+        },
+        "SL3": {
+          content: "Protein S is decreased. If relevant, it should be noted that recent discontinuation of warfarin or acute phase reactions biologically decrease protein S. If none of these variables is involved, a hereditary protein S deficiency is possible. The normal fibrinogen and normal factor VIII are not suggestive of an acute phase reaction. The protein S assay may be repeated any time when the patient is stable and has not received warfarin for at least 20 days.",
+        },
+        "CSAH": {
+          content: "The value for {protein S; protein C; antithrombin III } is elevated.  Elevated values have no currently known clinical significance.",
+        },
+        "ECMO1": {
+          content: "The PTT is prolonged in this acutely ill patient on ECMO and heparin.",
+        },
+        "LAHU": {
+          content: "Antithrombin III is low. Full-dose heparin administration can cause slight decreases in antithrombin III within several days, secondary to increased clearance. It is not known to the laboratory if the patient has received heparin prior to the collection of the present specimen. Other causes of decreased antithrombin III include liver dysfunction, recent thrombosis or surgery, significant proteinuria, disseminated intravascular coagulation (DIC), or hereditary deficiency. If hereditary antithrombin III deficiency is suspected, the assay may be repeated once the patient has recovered from any current illness and has not received heparin for at least 1 to 2 weeks.",
+        },
+        "ECMO2": {
+          content: "Antithrombin III is low. In this acutely ill patient on ECMO and heparin, this finding may be transient. Low levels of antithrombin III may be associated with heparin resistance. If hereditary antithrombin III deficiency is suspected, and if no prior antithrombin III tests are normal outside the context of recent transfusion, retesting when the patient has recovered from this acute illness could be considered.",
+        },
+        "FVL1": {
+          content: "The activated protein C resistance assay is normal, indicating that there is no laboratory evidence for the factor V Leiden mutation.",
+        },
+        "FVL2": {
+          content: "This patient has activated protein C resistance (APCR) due to heterozygosity for the factor V Leiden mutation, which confers a 4-5 fold increased risk for a first episode of venous thromboembolism (VTE) compared with the risk of first VTE for controls.  Note that for patients who have had a first unprovoked VTE, heterozygosity for factor V Leiden does not confer a clinically relevant increased risk for recurrent VTE compared to control patients who have had a first unprovoked VTE.",
+        },
+        "FVL3": {
+          content: "This patient has activated protein C resistance (APCR) due to homozygosity for the factor V Leiden mutation. Risk for an initial episode of venous thromboembolism (VTE) for homozygotes is estimated to be 7-20x higher than for those with no factor V Leiden mutations. Relative risk for a recurrent VTE is less well-defined but is likely lower (1-7x) and may not be significantly higher than that for patients without factor V Leiden mutations who have also had at least one prior unprovoked thrombotic event. Note that these risk estimates are based on more recent studies (e.g., PMID: 15900005, 20368522) that found significantly lower risks than had previously been reported.",
+        },
+        "PTG1": {
+          content: "An assay for the prothrombin mutation G20210A is normal.",
+        },
+        "PTG2": {
+          content: "An assay for prothrombin G20210A is pending at this time. Results will be reported separately in the chart when available.",
+        },
+        "1E": {
+          content: "1. This patient has a prolonged PT and PTT. The patient is known to have been receiving {bivalirudin; warfarin; argatroban} and the PT prolongation is consistent with that anticoagulation therapy.",
+        },
+        "1F": {
+          content: "Causes of PTT prolongations include treatment with heparin and/or warfarin, liver dysfunction, lupus anticoagulants, factor deficiency, or (if clinically suspected) disseminated intravascular coagulation (DIC). Clinical correlation advised.",
+        },
+        "1H1": {
+          content: "1. The specimen submitted has an elevated PTT. An Anti-Xa assay detects an anticoagulant, presumably  {heparin; UFH; LMWH} at  *** IU/mL. When the sample was treated with an enzyme that degrades heparin (Hepzyme), the PTT corrected into the normal range, indicating that the PTT prolongation is due to the presence of heparin in the sample.",
+        },
+        "1H2": {
+          content: "1. The specimen submitted has an elevated PTT. An Anti-Xa assay detects an anticoagulant, presumably {heparin; UFH; LMWH} at  *** IU/mL.  When the sample was treated with an enzyme that degrades heparin, the PTT failed to full correct into the normal range, indicating that the PTT prolongation is likely multifactorial and related to heparin in addition to other etiologies (e.g., a lupus anticoagulant, liver dysfunction and/or consumptive processes such as disseminated intravascular coagulation (DIC).",
+        },
+        "1L": {
+          content: "1. This patient has abnormal liver function tests. The PT is elevated at *** seconds, and the PTT is elevated at *** seconds. Fibrinogen is *** mg/dl. Factor VIII was found to be *** %.  These results are most consistent withdecreased synthesis of coagulation factors by the liver. In patients with liver disease, the factor VIII level can be normal or increased because factor VIII is synthesized in endothelial cells, not hepatocytes. DIC cannot be ruled out in this setting if DIC is suspected clinically.",
+        },
+        "1S": {
+          content: "1. The PTT is shortened. This can be seen in an acute phase reaction due to elevated factor VIII and/or fibrinogen or could represent a specimen artifact. If the patient is on emicizumab (Hemlibra), it should be noted that this can also cause a shortened PTT. The PT is normal.",
+        },
+        "2S": {
+          content: "The PT is shortened.  Slightly shortened PT is of unclear clinical significance and could reflect a testing or sample handling artifact, elevated factor VII levels, or other causes. The PTT is normal.",
+        },
+        "ECMOHEP": {
+          content: "The PT and PTT are prolonged in this acutely ill patient on ECMO and heparin.",
+        },
+        "FACINH": {
+          content: "The corrects {PT;PTT} in a mixing study at T0 *** sec, but is prolonged at T120 *** sec. These results are most commonly seen with a factor {V;VIII} inhibitor.",
+        },
+        "FD": {
+          content: "Given the findings below, the PTT is likely to be prolonged due to a combination of lupus anticoagulant and factor deficiency {VIII/IX,X,XI,XIII}.",
+        },
+        "FDLA": {
+          content: "The PTT is likely prolonged due to a lupus anticoagulant in this specimen.",
+        },
+        "LA": {
+          content: "Given the findings below, the PTT is likely to be prolonged due to factor deficiency {VIII/IX,X,XI,XIII}.",
+        },
+        "PTN": {
+          content: "The PT is normal.",
+        },
+        "PTTN": {
+          content: "The PTT is normal.",
+        },
+        "CSL": {
+          content: "Protein C and protein S are decreased. Deficiencies of proteins C and S may predispose patients to venous thrombosis. Decreased protein C and protein S may be due to vitamin K deficiency, warfarin use, liver disease, disseminated intravascular coagulation, or more rarely, congenital deficiency of protein C and/or protein S. Protein S may also be decreased in pregnancy or peripartum states, estrogen-based therapy, and inflammation. It is recommended that these studies be repeated outside the setting of acute thrombosis.",
+        },
+        "SAL": {
+          content: "Protein S and antithrombin III are low. This combination of findings can be caused by estrogen use, pregnancy, or disseminated intravascular coagulation (DIC). Alternatively, protein S can be decreased by warfarin or acute phase reactions, and antithrombin III can be decreased by heparin or proteinuria. Liver dysfunction, recent thrombosis or surgery can also decrease protein S and antithrombin III, but protein C would usually be decreased as well. If a hereditary antithrombin III or protein S deficiency is suspected, the assays may be repeated at a time when the patient has not received estrogen therapy (nor been pregnant) for at least 3 months, has not received warfarin for at least 20 days, has not received heparin for at least 1 to 2 weeks, and/or has recovered from any current illness.",
+        },
+        "CL": {
+          content: "Protein C is decreased. Causes of an isolated decrease in protein C include a hereditary deficiency, recent warfarin initiation, vitamin K deficiency, liver dysfunction or consumption during thrombosis, DIC or surgery. If clinically indicated, the protein C assay may be repeated any time when the patient is stable and has not received warfarin for at least 10 days.",
+        },
+        "SL1": {
+          content: "It is difficult to interpret this result without protein C and antithrombin III assays. If protein C and antithrombin III are also low, the possible etiologies would include liver dysfunction, thrombosis, major surgery, or DIC. If protein C is decreased and antithrombin III is normal, possible etiologies would include warfarin or vitamin K deficiency. If both are normal, possible etiologies would include an acute phase reaction, hereditary deficiency, or (in women) estrogen use or pregnancy.",
+        },
+        "SLO": {
+          content: "Protein S is low, but the patient is on estrogen, which can cause low protein S. If there is interest in excluding the possibility of an underlying hereditary deficiency, testing should be repeated any time after discontinuing estrogen for at least 3 months. Alternatively, first-degree family members may be tested if appropriate, as hereditary protein S deficiency has autosomal dominant inheritance.",
+        },
+        "SLPCOAG": {
+          content: "Protein S is low, but the patient is reportedly pregnant or post-partum. Protein S is normally decreased during pregnancy and for up to 3 months post-partum. Therefore, it is suggested to repeat the protein S level any time after 3 months post-partum.",
+        },
+        "SL4": {
+          content: "Protein S is decreased. Elevations in C4b-binding protein, which occur during an acute phase reaction, decrease protein S. The [elevated fibrinogen/FVIII] suggests inflammation, and therefore the decreased protein S may be atleast partially due to acute phase reaction (elevated C4b-binding protein). If the patient has not received warfarin or estrogen, a hereditary protein S deficiency is possible, particularly if the patient has a personal or family history of venous thrombosis. If a hereditary deficiency is suspected, the protein S assays may be repeated any time when the patient is stable, has a normal fibrinogen level, and has not received warfarin for at least 20 days. If indicated, measuring protein S in first-degree family members or any relative with a history of venous thrombosis may be informative, because hereditary protein S deficiency has autosomal dominant inheritance.",
+        },
+        "PEGA": {
+          content: "The ATIII activity is {normal; decreased; elevated}. This patient may have been evaluated for the level of antithrombin III because of treatment with L-asparaginase, which is known to decrease antithrombin III levels. Some guidelines suggest repletion of ATIII when levels drop to 50-70% (PMID: 31999063).",
+        },
+        "LAH": {
+          content: "Antithrombin III is slightly low. Heparin administration can cause slight decreases in antithrombin III within several days secondary to increased clearance. If hereditary antithrombin III deficiency is suspected, the assay may be repeated once the patient has been off heparin for at least 1 to 2 weeks.",
+        },
+        "WNL": {
+          content: "1. The PT and PTT are normal.  (TAB)  2. There is no evidence of a lupus anticoagulant.  The DRVVT and PTT-LA screens are negative.  The anticardiolipin antibody and anti-beta2-glycoprotein I antibodies are not elevated. (TAB) 3. The protein C, S, and ATIII are normal. (TAB) 4. The activated protein C resistance assay is normal, indicating that there is no laboratory evidence for the factor V Leiden mutation. 5. An assay for prothrombin G20210A is pending at this time. Results will be reported separately in the chart when available.",
+        },
+        "LSNOS": {
+          content: "Protein S is below the reference range. Possible causes for decreased protein S include pregnancy or peripartum states, estrogen-based therapy, anticoagulation (e.g., warfarin) therapy, inflammation, liver disease, consumption from disseminated intravascular coagulation or thrombosis, or hereditary factors. Decreased protein S may be associated with increased risk of thrombosis. If a hereditary deficiency is suspected, the protein S assays (activity and antigen level) may be repeated any time when the patient is stable, and has not received warfarin for at least 20 days and is not receiving other anticoagulant therapy. If indicated, measuring protein S in first-degree family members or any relative with a history of venous thrombosis may be informative, because hereditary protein S deficiency has autosomal dominant inheritance.",
+        }
+      };
+    }
+    
+    // Check if a code matches based on hardcoded conditions
+    function codeMatches(code, getResult, anticoagulants) {
+      // Guardrail: require tests to exist before evaluating status
+      const pt = getResult("PT");
+      const ptt = getResult("PTT");
+      const ptStatus = pt && pt.status ? (pt.status || "").toUpperCase() : "";
+      const pttStatus = ptt && ptt.status ? (ptt.status || "").toUpperCase() : "";
+      
+      const laScreen = getResult("Lupus anticoagulant (screen)");
+      const laStatus = laScreen ? (laScreen.status || "").toUpperCase() : "";
+      
+      const drvvt = getResult("DRVVT (screen)") || getResult("DRVVT (confirm)") || getResult("DRVVT");
+      const drvvtStatus = drvvt ? (drvvt.status || "").toUpperCase() : "";
+      
+      // Prefer Activity tests for code triggers (comment codes typically reference activity)
+      // Activity supersedes Antigen for status checks
+      const proteinCActivity = getResult("Protein C Activity");
+      const proteinCAntigen = getResult("Protein C Antigen");
+      const proteinC = proteinCActivity || proteinCAntigen || getResult("Protein C");
+      const proteinCStatus = proteinC ? (proteinC.status || "").toUpperCase() : "";
+      
+      const proteinSActivity = getResult("Protein S Activity");
+      const proteinSAntigen = getResult("Protein S Free Ag") || getResult("Protein S Antigen");
+      const proteinS = proteinSActivity || proteinSAntigen || getResult("Protein S");
+      const proteinSStatus = proteinS ? (proteinS.status || "").toUpperCase() : "";
+      const proteinSAntigenStatus = proteinSAntigen ? (proteinSAntigen.status || "").toUpperCase() : "";
+      
+      const at3Activity = getResult("AT3 Activity") || getResult("Antithrombin III Activity");
+      const at3Antigen = getResult("Antithrombin III Ag") || getResult("AT3 Antigen");
+      const at3 = at3Activity || at3Antigen || getResult("AT3") || getResult("Antithrombin III");
+      const at3Status = at3 ? (at3.status || "").toUpperCase() : "";
+      const at3AntigenStatus = at3Antigen ? (at3Antigen.status || "").toUpperCase() : "";
+      
+      const aclIgG = getResult("Cardiolipin Ab, IgG");
+      const aclIgM = getResult("Cardiolipin Ab, IgM");
+      const b2gpIgG = getResult("B2 glycoprotein 1 Ab, IgG");
+      const b2gpIgM = getResult("B2 glycoprotein 1 Ab, IgM");
+      
+      const antiXa = getResult("Anti-Xa Screen");
+      const antiXaStatus = antiXa ? (antiXa.status || "").toUpperCase() : "";
+      
+      const g20210 = getResult("G20210A Gene mutation");
+      const g20210Status = g20210 ? (g20210.status || "").toUpperCase() : "";
+      
+      const hasWarfarin = (anticoagulants || []).includes("warfarin");
+      const hasHeparin = (anticoagulants || []).includes("heparin");
+      
+      switch(code) {
+        case "1A":
+          return ptStatus === "NORMAL" && pttStatus === "NORMAL";
+        
+        case "1B":
+          // Both PT and PTT prolonged
+          return ptStatus === "PROLONGED" && pttStatus === "PROLONGED";
+        
+        case "1C":
+          // PT prolonged, PTT normal
+          return ptStatus === "PROLONGED" && pttStatus === "NORMAL";
+        
+        case "1D":
+          // PTT prolonged (PT can be normal or prolonged, but PTT must be prolonged)
+          return pttStatus === "PROLONGED";
+        
+        case "1E":
+          return ptStatus === "PROLONGED" || pttStatus === "PROLONGED";
+        
+        case "1F":
+          return ptStatus === "PROLONGED" || pttStatus === "PROLONGED";
+        
+        case "1H1":
+          return ptStatus === "PROLONGED" || pttStatus === "PROLONGED";
+        
+        case "1H2":
+          return ptStatus === "PROLONGED" || pttStatus === "PROLONGED";
+        
+        case "1L":
+          // Liver disease with abnormal PT/PTT and FVIII
+          const f8 = getResult("Factor VIII Activity");
+          const f8Status = f8 ? (f8.status || "").toUpperCase() : "";
+          // FVIII can be low or normal in liver disease (not both, but either is possible)
+          return (f8Status === "LOW" || f8Status === "NORMAL") && 
+                 (ptStatus === "PROLONGED" || pttStatus === "PROLONGED");
+        
+        case "1S":
+          return pttStatus === "SHORTENED" && ptStatus === "NORMAL";
+        
+        case "2S":
+          return ptStatus === "SHORTENED" && pttStatus === "NORMAL";
+        
+        case "L1":
+          return laStatus === "NEGATIVE";
+        
+        case "L2":
+          return laStatus === "INVALID";
+        
+        case "L4":
+          return laStatus === "POSITIVE";
+        
+        case "LH":
+          // LA tests performed after removal of heparin
+          // Need to check for actual "heparin removed/treated" indicator, not just heparin presence
+          // Check if heparin was detected and removed (typically indicated by hepzyme treatment or similar)
+          if (!hasHeparin) return false;
+          // Check if LA tests were performed (DRVVT or PTT-LA)
+          const laTestDone = !!(getResult("DRVVT (screen)") || getResult("DRVVT (confirm)") || 
+                               getResult("DRVVT") || getResult("Lupus anticoagulant (screen)"));
+          // Also check for hepzyme treatment indicator (heparin degradation)
+          const hepzyme = getResult("Hepzyme") || getResult("Heparinase");
+          const ttAfterHepzyme = getResult("Thrombin Time") && 
+                                 (getResult("Thrombin Time").name || "").toUpperCase().includes("HEPZYME");
+          return laTestDone && (!!hepzyme || ttAfterHepzyme || hasHeparin);
+        
+        case "D1":
+          return drvvtStatus === "NEGATIVE";
+        
+        case "D2":
+          return drvvtStatus === "POSITIVE";
+        
+        case "DU":
+          return drvvtStatus === "INVALID";
+        
+        case "NODV":
+          return drvvtStatus === "INVALID";
+        
+        case "NN1":
+          return laStatus === "NEGATIVE" && drvvtStatus === "NEGATIVE";
+        
+        case "NN2":
+          const aclIgGStatus = aclIgG ? (aclIgG.status || "").toUpperCase() : "";
+          const aclIgMStatus = aclIgM ? (aclIgM.status || "").toUpperCase() : "";
+          const b2gpIgGStatus = b2gpIgG ? (b2gpIgG.status || "").toUpperCase() : "";
+          const b2gpIgMStatus = b2gpIgM ? (b2gpIgM.status || "").toUpperCase() : "";
+          return laStatus === "NEGATIVE" && drvvtStatus === "NEGATIVE" && 
+                 aclIgGStatus === "NEGATIVE" && aclIgMStatus === "NEGATIVE" &&
+                 b2gpIgGStatus === "NEGATIVE" && b2gpIgMStatus === "NEGATIVE";
+        
+        case "NN3":
+          return ptStatus === "NORMAL" && pttStatus === "NORMAL" && laStatus === "NEGATIVE" &&
+                 (aclIgG ? (aclIgG.status || "").toUpperCase() === "NEGATIVE" : false) &&
+                 (b2gpIgG ? (b2gpIgG.status || "").toUpperCase() === "NEGATIVE" : false);
+        
+        case "APS":
+          const aclElevated = aclIgG ? (aclIgG.status || "").toUpperCase() === "ELEVATED" : false;
+          const aclMElevated = aclIgM ? (aclIgM.status || "").toUpperCase() === "ELEVATED" : false;
+          const b2gpElevated = b2gpIgG ? (b2gpIgG.status || "").toUpperCase() === "ELEVATED" : false;
+          const b2gpMElevated = b2gpIgM ? (b2gpIgM.status || "").toUpperCase() === "ELEVATED" : false;
+          return drvvtStatus === "POSITIVE" || laStatus === "POSITIVE" || 
+                 aclElevated || aclMElevated || b2gpElevated || b2gpMElevated;
+        
+        case "ABM":
+          const aclModerate = aclIgG ? (aclIgG.status || "").toUpperCase() === "MODERATE" : false;
+          const aclMModerate = aclIgM ? (aclIgM.status || "").toUpperCase() === "MODERATE" : false;
+          const b2gpModerate = b2gpIgG ? (b2gpIgG.status || "").toUpperCase() === "MODERATE" : false;
+          const b2gpMModerate = b2gpIgM ? (b2gpIgM.status || "").toUpperCase() === "MODERATE" : false;
+          return aclModerate || aclMModerate || b2gpModerate || b2gpMModerate;
+        
+        case "ABH":
+          const aclHigh = aclIgG ? (aclIgG.status || "").toUpperCase() === "ELEVATED" : false;
+          const aclMHigh = aclIgM ? (aclIgM.status || "").toUpperCase() === "ELEVATED" : false;
+          const b2gpHigh = b2gpIgG ? (b2gpIgG.status || "").toUpperCase() === "ELEVATED" : false;
+          const b2gpMHigh = b2gpIgM ? (b2gpIgM.status || "").toUpperCase() === "ELEVATED" : false;
+          return aclHigh || aclMHigh || b2gpHigh || b2gpMHigh;
+        
+        case "ABNORM":
+          // Fire if at least one test exists and all existing tests are negative
+          const existingTests = [aclIgG, aclIgM, b2gpIgG, b2gpIgM].filter(t => t);
+          if (existingTests.length === 0) return false; // Need at least one test
+          // All existing tests must be negative
+          return existingTests.every(t => (t.status || "").toUpperCase() === "NEGATIVE");
+        
+        case "NOAB":
+          // Fire when aPL antibody tests are NOT done (suggestion to perform them)
+          // Should NOT fire if tests already exist and are negative
+          const noabTests = [aclIgG, aclIgM, b2gpIgG, b2gpIgM].filter(Boolean);
+          // Only fire if NO tests have been performed
+          return noabTests.length === 0;
+        
+        case "APLN":
+          return laStatus === "NEGATIVE" && drvvtStatus === "NEGATIVE";
+        
+        case "HEXP":
+          return laStatus === "POSITIVE";
+        
+        case "PTLUPRO":
+        case "PTLUP":
+          return ptStatus === "PROLONGED";
+        
+        case "N1":
+          return proteinCStatus === "NORMAL" && proteinSStatus === "NORMAL" && at3Status === "NORMAL";
+        
+        case "N2":
+          // Protein C, Protein S, ATIII activity are ALL normal (AND, not OR)
+          return proteinCStatus === "NORMAL" && proteinSStatus === "NORMAL" && at3Status === "NORMAL";
+        
+        case "N3":
+          // N3: Protein C Activity normal, but Protein S or AT3 Activity invalid with normal Antigen (Type II)
+          // This indicates DOAC interference or Type II deficiency
+          const pcActivityStatus = proteinCActivity ? (proteinCActivity.status || "").toUpperCase() : "";
+          const psActivityStatus = proteinSActivity ? (proteinSActivity.status || "").toUpperCase() : "";
+          const at3ActivityStatus = at3Activity ? (at3Activity.status || "").toUpperCase() : "";
+          
+          // Protein C Activity must be normal
+          if (pcActivityStatus !== "NORMAL") return false;
+          
+          // Protein S or AT3 Activity is INVALID, but their Antigen is NORMAL (Type II scenario)
+          const psTypeII = psActivityStatus === "INVALID" && proteinSAntigenStatus === "NORMAL";
+          const at3TypeII = at3ActivityStatus === "INVALID" && at3AntigenStatus === "NORMAL";
+          
+          return psTypeII || at3TypeII;
+        
+        case "WCS":
+          // Protein C/S activities cannot be interpreted due to rivaroxaban/apixaban/warfarin exposure
+          // Should check for anticoagulant interference, not normal status
+          const hasInterferingAnticoag = (anticoagulants || []).some(ac => 
+            ac.toLowerCase().includes("rivaroxaban") || 
+            ac.toLowerCase().includes("apixaban") || 
+            ac.toLowerCase().includes("warfarin")
+          );
+          // Also check if Protein C or S activity tests exist (they would be uninterpretable)
+          const pcAct = getResult("Protein C Activity");
+          const psAct = getResult("Protein S Activity");
+          return hasInterferingAnticoag && (!!pcAct || !!psAct);
+        
+        case "CSAL":
+          // Protein C, S, and AT3 Activity are decreased (Activity supersedes Antigen)
+          const pcActStatusCSAL = proteinCActivity ? (proteinCActivity.status || "").toUpperCase() : "";
+          const psActStatusCSAL = proteinSActivity ? (proteinSActivity.status || "").toUpperCase() : "";
+          const at3ActStatusCSAL = at3Activity ? (at3Activity.status || "").toUpperCase() : "";
+          return pcActStatusCSAL === "LOW" && psActStatusCSAL === "LOW" && at3ActStatusCSAL === "LOW";
+        
+        case "CAL1":
+          return ptStatus === "PROLONGED" || pttStatus === "PROLONGED" ||
+                 (proteinCStatus === "LOW" && proteinSStatus === "LOW" && at3Status === "LOW");
+        
+        case "CAL2":
+          // Protein C and AT3 Activity are decreased (Activity supersedes Antigen)
+          const pcActStatusCAL2 = proteinCActivity ? (proteinCActivity.status || "").toUpperCase() : "";
+          const at3ActStatusCAL2 = at3Activity ? (at3Activity.status || "").toUpperCase() : "";
+          return pcActStatusCAL2 === "LOW" && at3ActStatusCAL2 === "LOW";
+        
+        case "SL2":
+          // SL2: Protein S Activity is LOW with normal Antigen (Type II scenario)
+          // OR Activity is INVALID with normal Antigen (Type II)
+          const psActStatus = proteinSActivity ? (proteinSActivity.status || "").toUpperCase() : "";
+          if (psActStatus === "LOW" && proteinSAntigenStatus === "NORMAL") return true;
+          if (psActStatus === "INVALID" && proteinSAntigenStatus === "NORMAL") return true;
+          return false;
+        
+        case "SL3":
+        case "SLO":
+        case "SLPCOAG":
+        case "SL4":
+        case "LSNOS":
+          // Protein S Activity is decreased (Activity supersedes Antigen)
+          const psActStatusSL = proteinSActivity ? (proteinSActivity.status || "").toUpperCase() : "";
+          return psActStatusSL === "LOW";
+        
+        case "SL1":
+          // Protein C or AT3 Activity decreased (Activity supersedes Antigen)
+          const pcActStatusSL1 = proteinCActivity ? (proteinCActivity.status || "").toUpperCase() : "";
+          const at3ActStatusSL1 = at3Activity ? (at3Activity.status || "").toUpperCase() : "";
+          return pcActStatusSL1 === "LOW" || at3ActStatusSL1 === "LOW";
+        
+        case "CSAH":
+          // Protein C/S/AT3 Activity are elevated (Activity supersedes Antigen)
+          const pcActStatusCSAH = proteinCActivity ? (proteinCActivity.status || "").toUpperCase() : "";
+          const psActStatusCSAH = proteinSActivity ? (proteinSActivity.status || "").toUpperCase() : "";
+          const at3ActStatusCSAH = at3Activity ? (at3Activity.status || "").toUpperCase() : "";
+          return pcActStatusCSAH === "HIGH" || psActStatusCSAH === "HIGH" || at3ActStatusCSAH === "HIGH";
+        
+        case "ECMO1":
+        case "ECMOHEP":
+        case "ECMO2":
+          // Optional - requires clinical context (ECMO)
+          return false; // Will be handled in optional codes section
+        
+        case "LAHU":
+        case "LAH":
+          // Antithrombin III Activity is low (Activity supersedes Antigen)
+          const at3ActStatusLAH = at3Activity ? (at3Activity.status || "").toUpperCase() : "";
+          return at3ActStatusLAH === "LOW";
+        
+        case "PEGA":
+          // ATIII activity can be normal, decreased, or elevated (check for any status)
+          return at3Status === "NORMAL" || at3Status === "LOW" || at3Status === "HIGH";
+        
+        case "FVL1":
+          // APC resistance is normal (negative)
+          const apcResistanceFVL1 = getResult("Act Protein C Resistance (confirm)");
+          const apcResistanceStatusFVL1 = apcResistanceFVL1 ? (apcResistanceFVL1.status || "").toUpperCase() : "";
+          return apcResistanceStatusFVL1 === "NEGATIVE";
+        
+        case "FVL2":
+          // APC resistance is positive (heterozygous FVL)
+          const apcResistanceFVL2 = getResult("Act Protein C Resistance (confirm)");
+          const apcResistanceStatusFVL2 = apcResistanceFVL2 ? (apcResistanceFVL2.status || "").toUpperCase() : "";
+          return apcResistanceStatusFVL2 === "POSITIVE";
+        
+        case "FVL3":
+          // APC resistance is positive (homozygous FVL) - same as FVL2, differentiation may be clinical
+          const apcResistanceFVL3 = getResult("Act Protein C Resistance (confirm)");
+          const apcResistanceStatusFVL3 = apcResistanceFVL3 ? (apcResistanceFVL3.status || "").toUpperCase() : "";
+          return apcResistanceStatusFVL3 === "POSITIVE";
+        
+        case "PTG1":
+          return g20210Status === "NEGATIVE";
+        
+        case "PTG2":
+          // Only fire if G20210A test was done but result is pending (not positive, not negative)
+          // If it's negative or positive, testing was already done, so it's not pending
+          if (!g20210) return false;
+          // Ensure we're matching the exact test name, not "Factor II Gene analysis"
+          const g20210Name = (g20210.name || "").toUpperCase();
+          if (!g20210Name.includes("G20210A") && !g20210Name.includes("PROTHROMBIN")) {
+            return false; // Not the right test
+          }
+          // Test exists but status must be explicitly PENDING or INVALID (not NEGATIVE, not POSITIVE, not empty)
+          return (g20210Status === "PENDING" || g20210Status === "INVALID");
+        
+        case "WRT":
+          const fvlTest = getResult("Act Protein C Resistance (confirm)");
+          return !fvlTest;
+        
+        case "TFN":
+          // Optional - requires clinical context (recent transfusion)
+          return false; // Will be handled in optional codes section
+        
+        case "13U":
+          // FXIII screening assay is normal but only detects severe deficiency
+          // Should check that screening assay is NORMAL, not just that test exists
+          const f13Screening_13u = getResult("Factor XIII") || getResult("FXIII") || getResult("Factor XIII Activity");
+          if (!f13Screening_13u) return false;
+          const f13ScreeningStatus_13u = (f13Screening_13u.status || "").toUpperCase();
+          return f13ScreeningStatus_13u === "NORMAL";
+        
+        case "13N":
+          // Only fire if Factor XIII screening assay is normal (test must have been done)
+          const f13Screening = getResult("Factor XIII") || getResult("FXIII") || getResult("Factor XIII Activity");
+          if (!f13Screening) return false;
+          const f13ScreeningStatus = (f13Screening.status || "").toUpperCase();
+          return f13ScreeningStatus === "NORMAL";
+        
+        case "PFH":
+          // Prothrombin fragment 1+2 is slightly above range (interpret PF1+2)
+          const pf12 = getResult("Prothrombin Fragment 1+2") || getResult("Prothrombin Fragment 1 + 2");
+          if (!pf12) return false;
+          const pf12Status = (pf12.status || "").toUpperCase();
+          // Should be slightly above range (HIGH status)
+          return pf12Status === "HIGH";
+        
+        case "PFN":
+          // Only fire if prothrombin fragment test was performed and is normal
+          const pf12_pfn = getResult("Prothrombin Fragment 1+2") || getResult("Prothrombin Fragment 1 + 2");
+          if (!pf12_pfn) return false;
+          const pf12Status_pfn = (pf12_pfn.status || "").toUpperCase();
+          return pf12Status_pfn === "NORMAL";
+        
+        case "VN1":
+          // VWF Ag/Act/FVIII are within reference ranges
+          const vwfAg_vn1 = getResult("VWF Ag");
+          const vwfAct_vn1 = getResult("VWF Activity");
+          const f8_vn1 = getResult("Factor VIII Activity");
+          if (!vwfAg_vn1 && !vwfAct_vn1) return false;
+          const vwfAgStatus_vn1 = vwfAg_vn1 ? (vwfAg_vn1.status || "").toUpperCase() : "";
+          const vwfActStatus_vn1 = vwfAct_vn1 ? (vwfAct_vn1.status || "").toUpperCase() : "";
+          const f8Status_vn1 = f8_vn1 ? (f8_vn1.status || "").toUpperCase() : "";
+          // All should be within range (NORMAL)
+          return (vwfAgStatus_vn1 === "NORMAL" || !vwfAg_vn1) && 
+                 (vwfActStatus_vn1 === "NORMAL" || !vwfAct_vn1) && 
+                 (f8Status_vn1 === "NORMAL" || !f8_vn1);
+        
+        case "VN2":
+          // VWF Ag/Act/FVIII are within reference ranges (with history of VWD)
+          const vwfAg_vn2 = getResult("VWF Ag");
+          const vwfAct_vn2 = getResult("VWF Activity");
+          const f8_vn2 = getResult("Factor VIII Activity");
+          if (!vwfAg_vn2 && !vwfAct_vn2) return false;
+          const vwfAgStatus_vn2 = vwfAg_vn2 ? (vwfAg_vn2.status || "").toUpperCase() : "";
+          const vwfActStatus_vn2 = vwfAct_vn2 ? (vwfAct_vn2.status || "").toUpperCase() : "";
+          const f8Status_vn2 = f8_vn2 ? (f8_vn2.status || "").toUpperCase() : "";
+          // All should be within range (NORMAL)
+          return (vwfAgStatus_vn2 === "NORMAL" || !vwfAg_vn2) && 
+                 (vwfActStatus_vn2 === "NORMAL" || !vwfAct_vn2) && 
+                 (f8Status_vn2 === "NORMAL" || !f8_vn2);
+        
+        case "DN":
+          // VWF Ag/Act/FVIII are within/above ranges (desmopressin treated)
+          const vwfAg_dn = getResult("VWF Ag");
+          const vwfAct_dn = getResult("VWF Activity");
+          const f8_dn = getResult("Factor VIII Activity");
+          if (!vwfAg_dn && !vwfAct_dn) return false;
+          const vwfAgStatus_dn = vwfAg_dn ? (vwfAg_dn.status || "").toUpperCase() : "";
+          const vwfActStatus_dn = vwfAct_dn ? (vwfAct_dn.status || "").toUpperCase() : "";
+          const f8Status_dn = f8_dn ? (f8_dn.status || "").toUpperCase() : "";
+          // Should be within or above range (NORMAL or HIGH)
+          return ((vwfAgStatus_dn === "NORMAL" || vwfAgStatus_dn === "HIGH") || !vwfAg_dn) && 
+                 ((vwfActStatus_dn === "NORMAL" || vwfActStatus_dn === "HIGH") || !vwfAct_dn) && 
+                 ((f8Status_dn === "NORMAL" || f8Status_dn === "HIGH") || !f8_dn);
+        
+        case "PN":
+          // VWF Ag/Act/FVIII are within/above ranges (VWF concentrate/desmopressin treated)
+          const vwfAg_pn = getResult("VWF Ag");
+          const vwfAct_pn = getResult("VWF Activity");
+          const f8_pn = getResult("Factor VIII Activity");
+          if (!vwfAg_pn && !vwfAct_pn) return false;
+          const vwfAgStatus_pn = vwfAg_pn ? (vwfAg_pn.status || "").toUpperCase() : "";
+          const vwfActStatus_pn = vwfAct_pn ? (vwfAct_pn.status || "").toUpperCase() : "";
+          const f8Status_pn = f8_pn ? (f8_pn.status || "").toUpperCase() : "";
+          // Should be within or above range (NORMAL or HIGH)
+          return ((vwfAgStatus_pn === "NORMAL" || vwfAgStatus_pn === "HIGH") || !vwfAg_pn) && 
+                 ((vwfActStatus_pn === "NORMAL" || vwfActStatus_pn === "HIGH") || !vwfAct_pn) && 
+                 ((f8Status_pn === "NORMAL" || f8Status_pn === "HIGH") || !f8_pn);
+        
+        case "INF":
+          // VWF Ag/Act/FVIII are above reference ranges (acute inflammation)
+          const vwfAg_inf = getResult("VWF Ag");
+          const vwfAct_inf = getResult("VWF Activity");
+          const f8_inf = getResult("Factor VIII Activity");
+          if (!vwfAg_inf && !vwfAct_inf) return false;
+          const vwfAgStatus_inf = vwfAg_inf ? (vwfAg_inf.status || "").toUpperCase() : "";
+          const vwfActStatus_inf = vwfAct_inf ? (vwfAct_inf.status || "").toUpperCase() : "";
+          const f8Status_inf = f8_inf ? (f8_inf.status || "").toUpperCase() : "";
+          // All should be above range (HIGH)
+          return (vwfAgStatus_inf === "HIGH" || !vwfAg_inf) && 
+                 (vwfActStatus_inf === "HIGH" || !vwfAct_inf) && 
+                 (f8Status_inf === "HIGH" || !f8_inf);
+        
+        case "ABOCOAG":
+          // Blood type is X obtained by chart/front type; O has lower VWF
+          // Should check for blood type data source, not just VWF testing
+          const vwfAbocoag = getResult("VWF Ag") || getResult("VWF Activity");
+          if (!vwfAbocoag) return false;
+          // Check if blood type information is available (from chart review or front type)
+          // This would typically come from context or a specific test result
+          // For now, require VWF testing AND assume blood type data exists if VWF is tested
+          // In a real implementation, you'd check for actual blood type data source
+          return true; // VWF testing done (blood type context would be checked separately in comment generation)
+        
+        case "DHR":
+          return !!(getResult("VWF Ag") && getResult("VWF Activity") && getResult("Factor VIII Activity"));
+        
+        case "3050A":
+        case "3050N":
+          // VWF low, FVIII can be low or normal
+          const f8_3050 = getResult("Factor VIII Activity");
+          const f8_3050Status = f8_3050 ? (f8_3050.status || "").toUpperCase() : "";
+          const vwfAg_3050 = getResult("VWF Ag");
+          const vwfAct_3050 = getResult("VWF Activity");
+          const vwfAgStatus_3050 = vwfAg_3050 ? (vwfAg_3050.status || "").toUpperCase() : "";
+          const vwfActStatus_3050 = vwfAct_3050 ? (vwfAct_3050.status || "").toUpperCase() : "";
+          const vwfLow_3050 = vwfAgStatus_3050 === "LOW" || vwfActStatus_3050 === "LOW";
+          return vwfLow_3050 && (f8_3050Status === "LOW" || f8_3050Status === "NORMAL");
+        
+        case "LOW1":
+        case "LOW2":
+        case "LOW3":
+        case "ACQ":
+        case "VW8":
+          const f8_low = getResult("Factor VIII Activity");
+          const f8_lowStatus = f8_low ? (f8_low.status || "").toUpperCase() : "";
+          return (f8_lowStatus === "LOW" || f8_lowStatus.includes("LOW")) &&
+                 !!(getResult("VWF Ag") || getResult("VWF Activity"));
+        
+        case "RATIO":
+          const f8_ratio = getResult("Factor VIII Activity");
+          return f8_ratio && (f8_ratio.status || "").toUpperCase() === "NORMAL";
+        
+        case "NEO":
+          return !!(getResult("VWF Ag") || getResult("VWF Activity"));
+        
+        case "VK":
+          // Guardrail: PT must be PROLONGED and test must exist
+          if (!pt || !pt.status) return false;
+          return ptStatus === "PROLONGED";
+        
+        case "10L":
+        case "FXA":
+        case "FC":
+        case "7L":
+          // Guardrail: require PT or PTT to exist and be prolonged
+          if ((!pt || !pt.status) && (!ptt || !ptt.status)) return false;
+          return (ptStatus === "PROLONGED" || pttStatus === "PROLONGED");
+        
+        case "10A":
+          // Factor X is low/normal/high (+ amyloidosis note)
+          // Should check Factor X result status, not just existence
+          const f10 = getResult("Factor X Activity");
+          if (!f10) return false;
+          const f10Status = (f10.status || "").toUpperCase();
+          // Fire if Factor X has any status (LOW, NORMAL, or HIGH)
+          return f10Status === "LOW" || f10Status === "NORMAL" || f10Status === "HIGH";
+        
+        case "NEOCOAG":
+          // Optional - requires clinical context (neonatal/child)
+          return false; // Will be handled in optional codes section
+        
+        case "FLUP":
+          // Only fire if lupus anticoagulant is present
+          return laStatus === "POSITIVE" || drvvtStatus === "POSITIVE";
+        
+        case "HBP":
+          // Only fire if Factor IX was measured and is normal
+          const f9 = getResult("Factor IX Activity");
+          if (!f9) return false;
+          const f9Status = (f9.status || "").toUpperCase();
+          return f9Status === "NORMAL";
+        
+        case "7HP":
+          // Only fire if Factor VII Activity is HIGH
+          const f7 = getResult("Factor VII Activity");
+          if (!f7) return false;
+          const f7Status = (f7.status || "").toUpperCase();
+          return f7Status === "HIGH";
+        
+        case "13C":
+          // Only fire if Factor XIII antigen is LOW (test must have been done)
+          const f13Antigen = getResult("Factor XIII Antigen") || getResult("FXIII Antigen");
+          if (!f13Antigen) return false;
+          const f13AntigenStatus = (f13Antigen.status || "").toUpperCase();
+          return f13AntigenStatus === "LOW";
+        
+        case "13A":
+          // Only fire if Factor XIII antigen is NORMAL (not elevated, not decreased; test must have been done)
+          const f13AntigenA = getResult("Factor XIII Antigen") || getResult("FXIII Antigen");
+          if (!f13AntigenA) return false;
+          const f13AntigenAStatus = (f13AntigenA.status || "").toUpperCase();
+          return f13AntigenAStatus === "NORMAL";
+        
+        case "12L":
+          // Only fire if Factor XII Activity is LOW or below reference range (test must have been done)
+          const f12 = getResult("Factor XII Activity");
+          if (!f12) return false;
+          const f12Status = (f12.status || "").toUpperCase();
+          return f12Status === "LOW" || f12Status.includes("LOW");
+        
+        case "PTTHI":
+        case "HAP":
+        case "HA":
+          // Markedly high PTT, no heparin/LA, FVIII <1%, mixing shows no inhibitor → "most consistent with hemophilia A"
+          const f8_ha = getResult("Factor VIII Activity");
+          if (!f8_ha) return false;
+          const f8_haStatus = (f8_ha.status || "").toUpperCase();
+          const f8_haValue = f8_ha.value ? parseFloat(f8_ha.value) : null;
+          // FVIII must be <1%
+          if (f8_haValue !== null && f8_haValue >= 1) return false;
+          // PTT must be markedly elevated (prolonged)
+          if (pttStatus !== "PROLONGED") return false;
+          // No heparin or LA
+          if (hasHeparin) return false;
+          if (laStatus === "POSITIVE" || drvvtStatus === "POSITIVE") return false;
+          // Mixing study should show no inhibitor (PTT mixing should correct or be done)
+          const pttMix_ha = getResult("PTT Mixing") || getResult("PTT Mix");
+          // If mixing study exists, it should show correction (no inhibitor)
+          // For now, require mixing study to exist
+          return !!pttMix_ha;
+        
+        case "HL":
+          // Only fire if Factor VIII testing was done
+          return !!getResult("Factor VIII Activity");
+        
+        case "ATI":
+          // Only fire if Factor VIII testing was done
+          return !!getResult("Factor VIII Activity");
+        
+        case "MFA":
+          // Only fire if Factor VIII testing was done
+          return !!getResult("Factor VIII Activity");
+        
+        case "CXT":
+          // Optional - will be handled in optional codes section
+          return false;
+        
+        case "8H":
+          // Factor VIII is elevated
+          const f8_8h = getResult("Factor VIII Activity");
+          const f8_8hStatus = f8_8h ? (f8_8h.status || "").toUpperCase() : "";
+          return f8_8hStatus === "HIGH";
+        
+        case "11L":
+          // Factor XI is decreased
+          const f11 = getResult("Factor XI Activity");
+          if (!f11) return false;
+          const f11Status = (f11.status || "").toUpperCase();
+          return f11Status === "LOW" || f11Status.includes("LOW");
+        
+        case "11L2":
+          // Factor XI is markedly decreased
+          const f11_2 = getResult("Factor XI Activity");
+          if (!f11_2) return false;
+          const f11_2Status = (f11_2.status || "").toUpperCase();
+          return f11_2Status === "LOW" || f11_2Status.includes("LOW");
+        
+        case "FD":
+        case "FDLA":
+          // Guardrail: PTT must be PROLONGED for these codes
+          return pttStatus === "PROLONGED";
+        
+        case "LA":
+        case "FACINH":
+          return ptStatus === "PROLONGED" || pttStatus === "PROLONGED";
+        
+        case "1112L":
+          return (ptStatus === "PROLONGED" || pttStatus === "PROLONGED") && laStatus === "NEGATIVE";
+        
+        case "PTMC":
+          // Guardrail: PT must be PROLONGED for mixing study comments
+          if (ptStatus !== "PROLONGED") return false;
+          // Only fire if PT mixing study was done
+          // Check for PT mixing study by name variations
+          const ptMixCheck = getResult("PT Mixing") || getResult("PT Mix");
+          if (ptMixCheck) return true;
+          // Check if PT result has "MIXING" in the name
+          const ptForMix = getResult("PT");
+          if (ptForMix && ptForMix.name && ptForMix.name.toUpperCase().includes("MIXING")) {
+            return true;
+          }
+          return false;
+        
+        case "PTTDEF":
+        case "PTTINH":
+        case "MIXLA":
+          // Guardrail: PTT must be PROLONGED for mixing study comments
+          if (pttStatus !== "PROLONGED") return false;
+          // Only fire if PTT mixing study was done
+          // Check for PTT mixing study by name (e.g., "PTT Mixing Studies")
+          const pttMixCheck = getResult("PTT Mixing") || getResult("PTT Mix") || 
+                             getResult("PTT Mixing Studies");
+          if (pttMixCheck) return true;
+          // Check if PTT result has "MIXING" in the name
+          const pttForMix = getResult("PTT");
+          if (pttForMix && pttForMix.name && pttForMix.name.toUpperCase().includes("MIXING")) {
+            return true;
+          }
+          return false;
+        
+        case "PTND":
+          // PT mix credited because PT was NOT prolonged 3 seconds
+          // Should fire when PT is NOT prolonged (reversed condition)
+          return ptStatus === "NORMAL";
+        
+        case "PTTND":
+          // PTT mix credited because PTT was NOT prolonged 5 seconds
+          // Should fire when PTT is NOT prolonged AND mixing study was done
+          if (pttStatus !== "NORMAL") return false;
+          // Check if PTT mixing study was done
+          const pttMixCheck_pttnd = getResult("PTT Mixing") || getResult("PTT Mix") || 
+                             getResult("PTT Mixing Studies");
+          if (pttMixCheck_pttnd) return true;
+          const pttForMix_pttnd = getResult("PTT");
+          if (pttForMix_pttnd && pttForMix_pttnd.name && pttForMix_pttnd.name.toUpperCase().includes("MIXING")) {
+            return true;
+          }
+          return false;
+        
+        case "RTS":
+          // Reptilase time is essentially normal
+          // Should check reptilase time, not PT/PTT
+          const reptilaseTime = getResult("Reptilase Time") || getResult("Reptilase");
+          if (!reptilaseTime) return false;
+          const reptilaseStatus = (reptilaseTime.status || "").toUpperCase();
+          return reptilaseStatus === "NORMAL";
+        
+        case "TTL":
+          // Thrombin time is prolonged (after hepzyme treatment)
+          const tt_ttl = getResult("Thrombin Time");
+          if (!tt_ttl) return false;
+          const ttStatus_ttl = (tt_ttl.status || "").toUpperCase();
+          // Should be prolonged
+          if (ttStatus_ttl !== "PROLONGED") return false;
+          // Should check for hepzyme treatment (heparin degradation)
+          const hepzyme_ttl = getResult("Hepzyme") || getResult("Heparinase");
+          const ttName_ttl = (tt_ttl.name || "").toUpperCase();
+          const afterHepzyme_ttl = ttName_ttl.includes("HEPZYME") || ttName_ttl.includes("HEPARINASE") || !!hepzyme_ttl;
+          return afterHepzyme_ttl && !!getResult("Fibrinogen");
+        
+        case "TTS":
+          // Thrombin time is essentially normal (not prolonged)
+          const tt_tts = getResult("Thrombin Time");
+          if (!tt_tts) return false;
+          const ttStatus_tts = (tt_tts.status || "").toUpperCase();
+          // Should be normal (not prolonged)
+          return ttStatus_tts === "NORMAL";
+        
+        case "DABOK":
+          // Dilute thrombin time prolonged, suggesting therapeutic dabigatran
+          const dtt_dabok = getResult("Dilute Thrombin Time") || getResult("DTT");
+          if (!dtt_dabok) return false;
+          const dttStatus_dabok = (dtt_dabok.status || "").toUpperCase();
+          // Should be prolonged
+          return dttStatus_dabok === "PROLONGED";
+        
+        case "DABHI":
+          // Dilute thrombin time prolonged, suggesting SUPRAtherapeutic dabigatran
+          const dtt_dabhi = getResult("Dilute Thrombin Time") || getResult("DTT");
+          if (!dtt_dabhi) return false;
+          const dttStatus_dabhi = (dtt_dabhi.status || "").toUpperCase();
+          // Should be prolonged
+          return dttStatus_dabhi === "PROLONGED";
+        
+        case "DABLO":
+          // Dilute thrombin time prolonged, suggesting SUBtherapeutic dabigatran
+          const dtt_dablo = getResult("Dilute Thrombin Time") || getResult("DTT");
+          if (!dtt_dablo) return false;
+          const dttStatus_dablo = (dtt_dablo.status || "").toUpperCase();
+          // Should be prolonged
+          return dttStatus_dablo === "PROLONGED";
+        
+        case "ARGOK":
+          // Dilute thrombin time prolonged, consistent with therapeutic argatroban
+          const dtt_argok = getResult("Dilute Thrombin Time") || getResult("DTT");
+          if (!dtt_argok) return false;
+          const dttStatus_argok = (dtt_argok.status || "").toUpperCase();
+          // Should be prolonged
+          return dttStatus_argok === "PROLONGED";
+        
+        case "ARGHI":
+          // Dilute thrombin time prolonged, suggesting SUPRAtherapeutic argatroban
+          const dtt_arghi = getResult("Dilute Thrombin Time") || getResult("DTT");
+          if (!dtt_arghi) return false;
+          const dttStatus_arghi = (dtt_arghi.status || "").toUpperCase();
+          // Should be prolonged
+          return dttStatus_arghi === "PROLONGED";
+        
+        case "ARGLO":
+          // Dilute thrombin time prolonged, suggesting SUBtherapeutic argatroban
+          const dtt_arglo = getResult("Dilute Thrombin Time") || getResult("DTT");
+          if (!dtt_arglo) return false;
+          const dttStatus_arglo = (dtt_arglo.status || "").toUpperCase();
+          // Should be prolonged
+          return dttStatus_arglo === "PROLONGED";
+        
+        case "BIVAL":
+          // Dilute thrombin time for bivalirudin monitoring
+          const dtt_bival = getResult("Dilute Thrombin Time") || getResult("DTT");
+          if (!dtt_bival) return false;
+          // Just needs to exist (value interpretation in comment)
+          return true;
+        
+        case "FN":
+        case "FH":
+        case "FHV":
+          return !!getResult("Fibrinogen");
+        
+        case "XA":
+          return antiXaStatus === "DETECTED";
+        
+        case "NOX":
+          return antiXaStatus === "NOT DETECTED";
+        
+        case "DXA":
+          // DXA fires when Anti-Xa detects DOAC (apixaban/rivaroxaban)
+          // Similar to XA but specifically for DOACs
+          if (antiXaStatus !== "DETECTED" && antiXaStatus !== "POSITIVE") return false;
+          // Check if patient is on apixaban or rivaroxaban
+          const hasDOAC = (anticoagulants || []).some(ac => 
+            ac.toLowerCase().includes("apixaban") || ac.toLowerCase().includes("rivaroxaban")
+          );
+          return hasDOAC;
+        
+        case "PTN":
+          // PTN is a basic code that should not fire in comprehensive workups
+          // Only fire in limited contexts where PT is normal but comprehensive codes don't apply
+          // Suppress if WNL conditions are met (comprehensive workup)
+          const apcResistanceForPTN = getResult("Act Protein C Resistance (confirm)");
+          const apcResistanceStatusForPTN = apcResistanceForPTN ? (apcResistanceForPTN.status || "").toUpperCase() : "";
+          const hasComprehensiveWorkup = ptStatus === "NORMAL" && pttStatus === "NORMAL" && 
+                                         drvvtStatus === "NEGATIVE" && laStatus === "NEGATIVE" && 
+                                         proteinCStatus === "NORMAL" && proteinSStatus === "NORMAL" && 
+                                         at3Status === "NORMAL" && apcResistanceStatusForPTN === "NEGATIVE";
+          if (hasComprehensiveWorkup) return false; // WNL should be used instead
+          return ptStatus === "NORMAL";
+        
+        case "PTTN":
+          return pttStatus === "NORMAL";
+        
+        case "CSL":
+          // Protein C or S Activity decreased (Activity supersedes Antigen)
+          const pcActStatusCSL = proteinCActivity ? (proteinCActivity.status || "").toUpperCase() : "";
+          const psActStatusCSL = proteinSActivity ? (proteinSActivity.status || "").toUpperCase() : "";
+          return (pcActStatusCSL === "LOW" && psActStatusCSL === "LOW");
+        
+        case "SAL":
+          // Protein S or AT3 Activity decreased (Activity supersedes Antigen)
+          const psActStatusSAL = proteinSActivity ? (proteinSActivity.status || "").toUpperCase() : "";
+          const at3ActStatusSAL = at3Activity ? (at3Activity.status || "").toUpperCase() : "";
+          return (psActStatusSAL === "LOW" && at3ActStatusSAL === "LOW");
+        
+        case "CL":
+          // Protein C Activity is decreased (Activity supersedes Antigen)
+          const pcActStatusCL2 = proteinCActivity ? (proteinCActivity.status || "").toUpperCase() : "";
+          return pcActStatusCL2 === "LOW";
+        
+        case "WNL":
+          // WNL requires: PT=NORMAL, PTT=NORMAL, DRVVT=NEGATIVE, LA=NEGATIVE,
+          // Protein C/S/AT3 Activity=NORMAL (Activity supersedes Antigen), APC resistance=NEGATIVE
+          // All required tests must exist and have the correct status
+          if (ptStatus !== "NORMAL" || pttStatus !== "NORMAL") return false;
+          if (drvvtStatus !== "NEGATIVE" || laStatus !== "NEGATIVE") return false;
+          const pcActStatusWNL = proteinCActivity ? (proteinCActivity.status || "").toUpperCase() : "";
+          const psActStatusWNL = proteinSActivity ? (proteinSActivity.status || "").toUpperCase() : "";
+          const at3ActStatusWNL = at3Activity ? (at3Activity.status || "").toUpperCase() : "";
+          if (pcActStatusWNL !== "NORMAL" || psActStatusWNL !== "NORMAL" || at3ActStatusWNL !== "NORMAL") return false;
+          const apcResistance = getResult("Act Protein C Resistance (confirm)");
+          const apcResistanceStatus = apcResistance ? (apcResistance.status || "").toUpperCase() : "";
+          if (apcResistanceStatus !== "NEGATIVE") return false;
+          return true;
+        
+        default:
+          return false;
+      }
+    }
+    
+    // Codes that require clinical context (optional section)
+    function isOptionalCode(code) {
+      const optionalCodes = [
+        "TFN",      // Recent transfusion
+        "NEOCOAG",  // Neonatal/child
+        "ECMO1",    // ECMO
+        "ECMO2",    // ECMO
+        "ECMOHEP",  // ECMO
+        "CXT"       // Chromogenic X (optional, requires LA positive)
+      ];
+      return optionalCodes.includes(code);
+    }
+    
+    function suggestPotentialCodes(results, overrides, anticoagulants = []) {
+      const codes = new Set();
+      const optionalCodes = new Set();
+      const codeDB = initializeCodeDatabase();
+      
+      // Helper to get result with override - uses canonical matching
+      function getResult(testName) {
+        const searchCanonical = canonicalKey(testName);
+        const nameUpper = testName.toUpperCase();
+        
+        // Try exact match first
+        for (const r of results) {
+          if (r.name.toUpperCase() === nameUpper) {
+            const key = r.allEntries ? r.name : `${r.panelDatetimeISO || ""}||${r.name}`;
+            const ov = overrides[key];
+            const finalStatus = ov?.status || r._combinedStatus || r.status;
+            return { ...r, status: finalStatus };
+          }
+        }
+        
+        // Try canonical match (e.g., "PT" matches "PT (POC)")
+        for (const r of results) {
+          const rCanonical = canonicalKey(r.name);
+          if (rCanonical === searchCanonical) {
+            const key = r.allEntries ? r.name : `${r.panelDatetimeISO || ""}||${r.name}`;
+            const ov = overrides[key];
+            const finalStatus = ov?.status || r._combinedStatus || r.status;
+            return { ...r, status: finalStatus };
+          }
+        }
+        
+        // Fallback: try word-boundary matching for non-core tests only
+        for (const r of results) {
+          const rNameUpper = r.name.toUpperCase();
+          // Use word boundaries to avoid PT matching PTT
+          const searchRegex = new RegExp(`\\b${nameUpper.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+          if (searchRegex.test(rNameUpper)) {
+            const key = r.allEntries ? r.name : `${r.panelDatetimeISO || ""}||${r.name}`;
+            const ov = overrides[key];
+            const finalStatus = ov?.status || r._combinedStatus || r.status;
+            return { ...r, status: finalStatus };
+          }
+        }
+        return null;
+      }
+      
+      // Check each code in database
+      for (const [code, codeEntry] of Object.entries(codeDB)) {
+        if (codeMatches(code, getResult, anticoagulants)) {
+          if (isOptionalCode(code)) {
+            optionalCodes.add(code);
+          } else {
+            codes.add(code);
+          }
+        }
+      }
+      
+      // Add section-based codes that may not be in codeDB or need combination logic
+      // SECTION 1: PT/PTT codes
+      const ptForCodes = getResult("PT");
+      const pttForCodes = getResult("PTT");
+      const ptStatusForCodes = ptForCodes && ptForCodes.status ? (ptForCodes.status || "").toUpperCase() : "";
+      const pttStatusForCodes = pttForCodes && pttForCodes.status ? (pttForCodes.status || "").toUpperCase() : "";
+      
+      if (ptStatusForCodes === "NORMAL" && pttStatusForCodes === "NORMAL") {
+        codes.add("1A");
+      }
+      
+      // SECTION 3: Protein C/S/AT3 codes
+      const pcActivityForCodes = getResult("Protein C Activity");
+      const psActivityForCodes = getResult("Protein S Activity");
+      const at3ActivityForCodes = getResult("AT3 Activity") || getResult("Antithrombin III Activity");
+      
+      const pcStatusForCodes = pcActivityForCodes ? (pcActivityForCodes.status || "").toUpperCase() : "";
+      const psStatusForCodes = psActivityForCodes ? (psActivityForCodes.status || "").toUpperCase() : "";
+      const at3StatusForCodes = at3ActivityForCodes ? (at3ActivityForCodes.status || "").toUpperCase() : "";
+      
+      if (pcStatusForCodes === "NORMAL" && psStatusForCodes === "NORMAL" && at3StatusForCodes === "NORMAL") {
+        codes.add("N1");
+        codes.add("N2");
+      }
+      
+      // SECTION 4: FVL codes
+      const fvlResultForCodes = getResult("Act Protein C Resistance (confirm)");
+      if (fvlResultForCodes) {
+        const fvlStatusForCodes = (fvlResultForCodes.status || "").toUpperCase();
+        if (fvlStatusForCodes === "NEGATIVE") {
+          codes.add("FVL1");
+        } else if (fvlStatusForCodes === "POSITIVE") {
+          codes.add("FVL2"); // Could be FVL3, but that's usually clinical differentiation
+        }
+      }
+      
+      // SECTION 5: LA/DRVVT codes
+      const laScreenForCodes = getResult("Lupus anticoagulant (screen)");
+      const laStatusForCodes = laScreenForCodes ? (laScreenForCodes.status || "").toUpperCase() : "";
+      const drvvtForCodes = getResult("DRVVT (screen)") || getResult("DRVVT (confirm)") || getResult("DRVVT");
+      const drvvtStatusForCodes = drvvtForCodes ? (drvvtForCodes.status || "").toUpperCase() : "";
+      
+      if (laStatusForCodes === "NEGATIVE" && drvvtStatusForCodes === "NEGATIVE") {
+        codes.add("NN1");
+        // Check for NN2/NN3 if aPL antibodies are tested
+        const aclIgGForCodes = getResult("Cardiolipin Ab, IgG");
+        const aclIgMForCodes = getResult("Cardiolipin Ab, IgM");
+        const b2gpIgGForCodes = getResult("B2 glycoprotein 1 Ab, IgG");
+        const b2gpIgMForCodes = getResult("B2 glycoprotein 1 Ab, IgM");
+        
+        if (aclIgGForCodes || aclIgMForCodes || b2gpIgGForCodes || b2gpIgMForCodes) {
+          const allAPLNeg = [aclIgGForCodes, aclIgMForCodes, b2gpIgGForCodes, b2gpIgMForCodes].every(t => 
+            !t || !t.status || (t.status || "").toUpperCase() === "NEGATIVE"
+          );
+          if (allAPLNeg) {
+            codes.add("NN2");
+            if (ptStatusForCodes === "NORMAL" && pttStatusForCodes === "NORMAL") {
+              codes.add("NN3");
+            }
+          }
+        }
+      }
+      
+      // SECTION 6: Molecular codes (PTG1, PTG2)
+      const g20210ForCodes = getResult("G20210A Gene mutation");
+      if (g20210ForCodes) {
+        const g20210StatusForCodes = (g20210ForCodes.status || "").toUpperCase();
+        if (g20210StatusForCodes === "NEGATIVE") {
+          codes.add("PTG1");
+        } else if (g20210StatusForCodes === "PENDING" || g20210StatusForCodes === "INVALID" || 
+                   (!g20210StatusForCodes && g20210ForCodes.name)) {
+          // Check it's actually G20210A, not Factor II Gene analysis
+          const g20210Name = (g20210ForCodes.name || "").toUpperCase();
+          if (g20210Name.includes("G20210A") || g20210Name.includes("PROTHROMBIN")) {
+            codes.add("PTG2");
+          }
+        }
+      }
+      
+      // Also check for optional codes that might be applicable based on conditions
+      const laScreen = getResult("Lupus anticoagulant (screen)");
+      const laStatus = laScreen ? (laScreen.status || "").toUpperCase() : "";
+      const drvvt = getResult("DRVVT (screen)") || getResult("DRVVT (confirm)") || getResult("DRVVT");
+      const drvvtStatus = drvvt ? (drvvt.status || "").toUpperCase() : "";
+      
+      // CXT - optional but requires LA positive
+      if ((laStatus === "POSITIVE" || drvvtStatus === "POSITIVE") && codeDB["CXT"]) {
+        optionalCodes.add("CXT");
+      }
+      
+      // ECMO codes - optional, show if PT/PTT prolonged (clinical context still needed)
+      const pt = getResult("PT");
+      const ptt = getResult("PTT");
+      const ptStatus = pt ? (pt.status || "").toUpperCase() : "";
+      const pttStatus = ptt ? (ptt.status || "").toUpperCase() : "";
+      if ((ptStatus === "PROLONGED" || pttStatus === "PROLONGED") && codeDB["ECMO1"]) {
+        optionalCodes.add("ECMO1");
+        optionalCodes.add("ECMOHEP");
+      }
+      const at3 = getResult("AT3 Activity") || getResult("Antithrombin III Activity") || 
+                  getResult("Antithrombin III Ag") || getResult("AT3 Antigen") || 
+                  getResult("AT3") || getResult("Antithrombin III");
+      const at3Status = at3 ? (at3.status || "").toUpperCase() : "";
+      if (at3Status === "NORMAL" && codeDB["ECMO2"]) {
+        optionalCodes.add("ECMO2");
+      }
+      
+      // Apply priority/one-of groups to prevent mutually exclusive codes
+      const finalCodes = applyPriorityGroups(Array.from(codes));
+      
+      return {
+        standard: finalCodes.sort(),
+        optional: Array.from(optionalCodes).sort()
+      };
+    }
+    
+    // Apply priority groups to prevent mutually exclusive codes from showing together
+    function applyPriorityGroups(codes) {
+      const result = new Set(codes);
+      
+      // PT/PTT group: pick only one of {1A,1B,1C,1D,1S,2S}
+      const ptPttGroup = ["1A", "1B", "1C", "1D", "1S", "2S"];
+      const ptPttFound = ptPttGroup.filter(c => result.has(c));
+      if (ptPttFound.length > 1) {
+        // Priority: 1A > 1B > 1C > 1D > 1S > 2S
+        const priority = ["1A", "1B", "1C", "1D", "1S", "2S"];
+        const highest = priority.find(p => ptPttFound.includes(p));
+        ptPttFound.forEach(c => {
+          if (c !== highest) result.delete(c);
+        });
+      }
+      
+      // LA/DRVVT negative group: NN3 > NN2 > NN1
+      if (result.has("NN3")) {
+        result.delete("NN2");
+        result.delete("NN1");
+      } else if (result.has("NN2")) {
+        result.delete("NN1");
+      }
+      
+      // Anti-Xa group: DXA > XA (if DOAC), NOX mutually exclusive with XA/DXA
+      if (result.has("DXA")) {
+        result.delete("XA");
+        result.delete("NOX");
+      } else if (result.has("XA")) {
+        result.delete("NOX");
+      }
+      
+      // WNL supersedes component "normal" codes
+      if (result.has("WNL")) {
+        result.delete("1A"); // WNL already covers normal PT/PTT
+        result.delete("PTN");
+        result.delete("PTTN");
+        result.delete("NN1");
+        result.delete("NN2");
+        result.delete("NN3");
+        result.delete("N1"); // WNL covers normal PC/PS/AT3
+        result.delete("FVL1"); // WNL covers normal APC resistance
+        result.delete("PTG1"); // WNL may cover G20210A (if included)
+      }
+      
+      return Array.from(result);
+    }
+    
+    // Get code content for display
+    function getCodeContent(code) {
+      const codeDB = initializeCodeDatabase();
+      return codeDB[code]?.content || commentData[code] || "";
+    }
+    
+    function suggestPotentialCodes_OLD(results, overrides, anticoagulants = []) {
+      const codes = new Set();
+      
+      // Helper to get result with override
+      function getResult(testName) {
+        const nameUpper = testName.toUpperCase();
+        for (const r of results) {
+          if (r.name.toUpperCase() === nameUpper || r.name.toUpperCase().includes(nameUpper)) {
+            // Match the key format used elsewhere: allEntries ? name : panelDatetimeISO||name
+            const key = r.allEntries ? r.name : `${r.panelDatetimeISO || ""}||${r.name}`;
+            const ov = overrides[key];
+            // Use override status, then combined status, then calculated status
+            const finalStatus = ov?.status || r._combinedStatus || r.status;
+            return { ...r, status: finalStatus };
+          }
+        }
+        return null;
+      }
+      
+      // Helper to classify status
+      function classifyTimeAssay(result) {
+        if (!result) return "missing";
+        const status = result.status || "";
+        if (status === "PROLONGED") return "prolonged";
+        if (status === "SHORTENED") return "shortened";
+        if (status === "NORMAL") return "normal";
+        return "missing";
+      }
+      
+      function classifyBinary(result) {
+        if (!result) return null;
+        const status = result.status || "";
+        const upper = status.toUpperCase();
+        if (upper.includes("POSITIVE") || upper.includes("DETECTED")) return "positive";
+        if (upper.includes("NEGATIVE") || upper.includes("NOT DETECTED")) return "negative";
+        if (upper.includes("INVALID") || upper.includes("UNINTERPRETABLE")) return "uninterpretable";
+        return null;
+      }
+      
+      // SECTION 1: PT/PTT codes (1A, 1B, 1C, 1D, 1S, 2S, PTTN, PTN, etc.)
+      const ptResult = getResult("PT") || getResult("PT (POC)");
+      const pttResult = getResult("PTT");
+      const ptStatus = classifyTimeAssay(ptResult);
+      const pttStatus = classifyTimeAssay(pttResult);
+      
+      if (ptStatus !== "missing" && pttStatus !== "missing") {
+        if (ptStatus === "normal" && pttStatus === "normal") codes.add("1A");
+        if (ptStatus === "prolonged" && pttStatus === "prolonged") codes.add("1B");
+        if (ptStatus === "prolonged" && pttStatus === "normal") codes.add("1C");
+        if (ptStatus === "normal" && pttStatus === "prolonged") codes.add("1D");
+        if (ptStatus === "normal" && pttStatus === "shortened") codes.add("1S");
+        if (ptStatus === "shortened" && pttStatus === "normal") codes.add("2S");
+      } else if (ptStatus === "prolonged") {
+        codes.add("PTN"); // Could be PTN
+      } else if (pttStatus === "prolonged") {
+        codes.add("1D");
+        codes.add("PTTN"); // Could be PTTN
+      } else if (pttStatus === "normal") {
+        codes.add("PTTN");
+      } else if (ptStatus === "normal") {
+        codes.add("PTN");
+      }
+      
+      // Anti-Xa codes (NOX, XA, DXA)
+      const noxResult = getResult("Anti-Xa Screen");
+      if (noxResult) {
+        const noxStatus = classifyBinary(noxResult);
+        if (noxStatus === "negative") codes.add("NOX");
+        if (noxStatus === "positive" || noxStatus === "detected") {
+          codes.add("XA");
+          const anticoags = anticoagulants || [];
+          if (anticoags.includes("apixaban") || anticoags.includes("rivaroxaban")) {
+            codes.add("DXA");
+          }
+        }
+      }
+      
+      // SECTION 3: Protein C/S/AT3 codes (N1, N2, CSAL, CSL, SAL, CAL2, etc.)
+      // Activity supersedes Antigen for status checks
+      const pcActivity = getResult("Protein C Activity");
+      const psActivity = getResult("Protein S Activity");
+      const at3Activity = getResult("AT3 Activity") || getResult("Antithrombin III Activity");
+      
+      const psAntigen = getResult("Protein S Free Ag") || getResult("Protein S Antigen");
+      const at3Antigen = getResult("Antithrombin III Ag") || getResult("AT3 Antigen");
+      
+      // Use Activity status (Activity supersedes Antigen)
+      const pc = pcActivity ? (pcActivity.status || "").toLowerCase() : null;
+      const ps = psActivity ? (psActivity.status || "").toLowerCase() : null;
+      const at3 = at3Activity ? (at3Activity.status || "").toLowerCase() : null;
+      
+      const psAntigenStatus = psAntigen ? (psAntigen.status || "").toLowerCase() : null;
+      const at3AntigenStatus = at3Antigen ? (at3Antigen.status || "").toLowerCase() : null;
+      
+      if (pc === "normal" && ps === "normal" && at3 === "normal") {
+        codes.add("N1");
+        codes.add("N2");
+      }
+      if (pc === "low" && ps === "low" && at3 === "low") codes.add("CSAL");
+      if (pc === "low" && ps === "low") codes.add("CSL");
+      if (ps === "low" && at3 === "low") codes.add("SAL");
+      if (pc === "low" && at3 === "low") codes.add("CAL2");
+      if (pc === "low") codes.add("CL");
+      if (ps === "low") codes.add("SL");
+      if (ps === "low") codes.add("SL3");
+      if (at3 === "low") codes.add("AL");
+      
+      // Type II scenarios: Activity INVALID or LOW with Antigen NORMAL
+      // N3: Protein C Activity normal, but Protein S or AT3 Activity invalid with normal Antigen
+      if (pc === "normal") {
+        const psTypeII = (ps === "invalid" || ps === "low") && psAntigenStatus === "normal";
+        const at3TypeII = (at3 === "invalid" || at3 === "low") && at3AntigenStatus === "normal";
+        if (psTypeII || at3TypeII) {
+          codes.add("N3");
+        }
+      }
+      
+      // SL2: Protein S Activity LOW or INVALID with normal Antigen (Type II)
+      if ((ps === "low" || ps === "invalid") && psAntigenStatus === "normal") {
+        codes.add("SL2");
+      }
+      
+      // WCS - if warfarin/apixaban/rivaroxaban and Protein C/S present
+      const anticoags = anticoagulants || [];
+      const hasInterferingAnticoag = anticoags.some(ac => 
+        ["warfarin", "apixaban", "rivaroxaban"].includes(ac)
+      );
+      if (hasInterferingAnticoag && (pcResult || psResult)) {
+        codes.add("WCS");
+      }
+      
+      // SECTION 4: FVL codes
+      const fvlResult = getResult("Act Protein C Resistance (confirm)");
+      if (fvlResult) {
+        const fvlStatus = fvlResult.status || "";
+        if (fvlStatus.toUpperCase().includes("POSITIVE")) codes.add("FVL");
+      }
+      
+      // SECTION 5: LA/DRVVT/aPL codes (L1, L2, D1, D2, DU, NODV, NN1, NN2, NN3, etc.)
+      const laResult = getResult("Lupus anticoagulant (screen)");
+      const drvvtResult = getResult("DRVVT (screen)") || getResult("DRVVT (confirm)") || getResult("DRVVT");
+      
+      const laStatus = classifyBinary(laResult);
+      const drvvtStatus = classifyBinary(drvvtResult);
+      
+      if (laStatus === "negative") codes.add("L1");
+      if (laStatus === "uninterpretable") codes.add("L2");
+      
+      if (drvvtStatus === "negative") codes.add("D1");
+      if (drvvtStatus === "positive") codes.add("D2");
+      if (drvvtStatus === "uninterpretable") codes.add("DU");
+      
+      // NODV - DRVVT uninterpretable, LA negative, interfering anticoag
+      if (drvvtStatus === "uninterpretable" && laStatus === "negative" && hasInterferingAnticoag) {
+        codes.add("NODV");
+      }
+      
+      // NN codes - all negative
+      if (laStatus === "negative" && drvvtStatus === "negative") {
+        codes.add("NN1");
+        // Check aPL antibodies
+        const aclIgG = getResult("Cardiolipin Ab, IgG");
+        const aclIgM = getResult("Cardiolipin Ab, IgM");
+        const b2gpIgG = getResult("B2 glycoprotein 1 Ab, IgG");
+        const b2gpIgM = getResult("B2 glycoprotein 1 Ab, IgM");
+        
+        const allAPLNegative = [aclIgG, aclIgM, b2gpIgG, b2gpIgM].every(t => 
+          !t || !t.status || t.status === "NEGATIVE" || t.status === "MODERATE"
+        );
+        
+        if (allAPLNegative && (aclIgG || aclIgM || b2gpIgG || b2gpIgM)) {
+          codes.add("NN2");
+          if (ptStatus === "normal" && pttStatus === "normal") {
+            codes.add("NN3");
+          }
+        }
+      }
+      
+      // aPL antibody codes (ABM, ABH, ABNORM)
+      const aclIgG = getResult("Cardiolipin Ab, IgG");
+      const aclIgM = getResult("Cardiolipin Ab, IgM");
+      const b2gpIgG = getResult("B2 glycoprotein 1 Ab, IgG");
+      const b2gpIgM = getResult("B2 glycoprotein 1 Ab, IgM");
+      
+      const hasModerate = [aclIgG, aclIgM, b2gpIgG, b2gpIgM].some(t => t && t.status === "MODERATE");
+      const hasElevated = [aclIgG, aclIgM, b2gpIgG, b2gpIgM].some(t => t && t.status === "ELEVATED");
+      
+      if (hasModerate) codes.add("ABM");
+      if (hasElevated) codes.add("ABH");
+      
+      const allAPLNegative = [aclIgG, aclIgM, b2gpIgG, b2gpIgM].every(t => 
+        !t || !t.status || t.status === "NEGATIVE"
+      );
+      if (allAPLNegative && (aclIgG || aclIgM || b2gpIgG || b2gpIgM)) {
+        codes.add("ABNORM");
+      }
+      
+      // APS - if LA positive or aPL elevated
+      const laPos = laStatus === "positive" || drvvtStatus === "positive";
+      const aplPos = hasElevated;
+      if (laPos || aplPos) codes.add("APS");
+      
+      // LH - heparin detected and LA tests performed
+      const hasHeparin = anticoags.includes("heparin");
+      if (hasHeparin && (laResult || drvvtResult)) {
+        codes.add("LH");
+      }
+      
+      // SECTION 6: Molecular codes (G20210A, etc.)
+      const g20210Result = getResult("G20210A Gene mutation");
+      if (g20210Result) {
+        const gStatus = g20210Result.status || "";
+        if (gStatus.toUpperCase().includes("POSITIVE")) codes.add("G20210A");
+      }
+      
+      // FD/FDLA - PT prolonged and LA positive
+      if (ptStatus === "prolonged" && (laStatus === "positive" || drvvtStatus === "positive")) {
+        codes.add("FDLA");
+        codes.add("FD"); // Could be either
+      }
+      
+      return Array.from(codes).sort();
+    }
+
+    function generateComments(results, overrides, anticoagulants = []) {
+      // Build test map
+      const testMap = {};
+      results.forEach(r => {
+        const key = r.allEntries ? r.name : `${r.panelDatetimeISO}||${r.name}`;
+        const ov = overrides[key] || null;
+        const calculatedStatus = r._combinedStatus || calculateStatus(r);
+        const status = ov?.status || calculatedStatus || "";
+        const nameUpper = r.name.toUpperCase();
+        
+        testMap[nameUpper] = {
+          name: r.name,
+          status: status,
+          rawValue: r.rawValue,
+          values: r.values || [],
+          result: r
+        };
+      });
+      
+      const getResult = (testName) => {
+        // Try exact match first
+        let result = testMap[testName.toUpperCase()];
+        if (result) return result;
+        
+        // Try variations
+        const variations = [
+          testName + " Activity",
+          testName + " (screen)",
+          testName + " (confirm)",
+          testName.replace("Ab,", "Ab,"),
+          testName.replace("Ab", "Ab,")
+        ];
+        
+        for (const variant of variations) {
+          result = testMap[variant.toUpperCase()];
+          if (result) return result;
+        }
+        
+        return null;
+      };
+      
+      // Build context with anticoagulants
+      const context = { anticoagulants };
+      
+      const points = [];
+      
+      // SECTION 1: PT/PTT
+      const sec1 = buildSection1_PT_PTT(results, testMap, getResult, context);
+      addNumberedPoint(points, sec1);
+      
+      // SECTION 2: Factors (simplified - returns empty for now)
+      const sec2 = buildSection2_Factors(results, testMap, getResult, context);
+      addNumberedPoint(points, sec2);
+      
+      // SECTION 3: Protein C/S/ATIII
+      const sec3 = buildSection3_NaturalAnticoagulants(results, testMap, getResult, context);
+      addNumberedPoint(points, sec3);
+      
+      // SECTION 4: FVL
+      const sec4 = buildSection4_FVL(results, testMap, getResult, context);
+      addNumberedPoint(points, sec4);
+      
+      // SECTION 5: DRVVT/LA/aPL (all together)
+      const sec5 = buildSection5_LA_DRVVT_APL(results, testMap, getResult, context);
+      addNumberedPoint(points, sec5);
+      
+      // SECTION 6: Molecular tests
+      const sec6 = buildSection6_Molecular(results, testMap, getResult, context);
+      addNumberedPoint(points, sec6);
+      
+      return joinPoints(points);
     }
 
     // ===== UI FUNCTIONS =====
@@ -595,6 +3156,31 @@
     }
 
     // Deleted items store: array of keys
+    function loadDismissedCodes() {
+      try {
+        const stored = localStorage.getItem("coagDismissedCodes");
+        return stored ? JSON.parse(stored) : [];
+      } catch {
+        return [];
+      }
+    }
+    
+    function saveDismissedCodes(codes) {
+      try {
+        localStorage.setItem("coagDismissedCodes", JSON.stringify(codes));
+      } catch (e) {
+        console.error("Failed to save dismissed codes:", e);
+      }
+    }
+    
+    function dismissCode(code) {
+      const dismissed = loadDismissedCodes();
+      if (!dismissed.includes(code)) {
+        dismissed.push(code);
+        saveDismissedCodes(dismissed);
+      }
+    }
+    
     function loadDeleted() {
       try { return JSON.parse(localStorage.getItem("coagDeleted") || "[]"); }
       catch { return []; }
@@ -625,6 +3211,8 @@
       if (!parsed || !parsed.panels.length) {
         $("legend").textContent = "";
         $("panels-container").innerHTML = "";
+        const cs = $("comments-section");
+        if (cs) cs.style.display = "none";
         return;
       }
 
@@ -638,22 +3226,24 @@
     }
 
     function combineDuplicateTests(results) {
-      // Group results by test name
+      // Group results by canonical test key (so PT and PT (POC) combine)
       const grouped = {};
       
       results.forEach((result) => {
-        const name = result.name;
-        if (!grouped[name]) {
-          grouped[name] = [];
+        const canonical = canonicalKey(result.name);
+        if (!grouped[canonical]) {
+          grouped[canonical] = [];
         }
-        grouped[name].push(result);
+        grouped[canonical].push(result);
       });
       
       // Combine entries for all duplicate test names
       const combinedResults = [];
       
-      Object.keys(grouped).forEach((name) => {
-        const entries = grouped[name];
+      Object.keys(grouped).forEach((canonical) => {
+        const entries = grouped[canonical];
+        // Use the first entry's name as the display name
+        const name = entries[0].name;
         const nameUpper = name.toUpperCase();
         
         // Combine all duplicate test names (any test that appears more than once)
@@ -709,8 +3299,7 @@
               } else {
                 combined._combinedStatus = "NOT DETECTED";
               }
-            } else if ((nameUpper.includes("PT") && !nameUpper.includes("PT-INR") && !nameUpper.includes("HEPARIN") && !nameUpper.includes("PROTEIN")) ||
-                       (nameUpper.includes("PTT") && !nameUpper.includes("HEPARIN"))) {
+            } else if (isPT(nameUpper) || isPTT(nameUpper)) {
               // PT/PTT: PROLONGED/SHORTENED overrides NORMAL
               if (statuses.includes("PROLONGED")) {
                 combined._combinedStatus = "PROLONGED";
@@ -793,9 +3382,12 @@
 
       // Filter out deleted items
       const deleted = loadDeleted();
-      const rows = combinedResults.filter(r => {
+      const allNonDeletedResults = combinedResults.filter(r => {
         const key = r.allEntries ? r.name : `${r.panelDatetimeISO}||${r.name}`;
-        return !deleted.includes(key) && (!filter || r.name.toLowerCase().includes(filter));
+        return !deleted.includes(key);
+      });
+      const rows = allNonDeletedResults.filter(r => {
+        return !filter || r.name.toLowerCase().includes(filter);
       });
 
         if (rows.length === 0) {
@@ -904,16 +3496,138 @@
 
       tableDiv.appendChild(table);
       container.appendChild(tableDiv);
+      
+      // Update potential codes when overrides change (use existing allNonDeletedResults from above)
+      const latestOverrides = loadOverrides();
+      const anticoagulants = parsed.anticoagulants || [];
+      const codeResults = suggestPotentialCodes(allNonDeletedResults, latestOverrides, anticoagulants);
+      const dismissedCodes = loadDismissedCodes();
+      const activeCodes = codeResults.standard.filter(code => !dismissedCodes.includes(code));
+      const activeOptionalCodes = codeResults.optional.filter(code => !dismissedCodes.includes(code));
+      
+      // Helper function to render code badges
+      function renderCodeBadges(codes, container) {
+        container.innerHTML = "";
+        if (codes && codes.length > 0) {
+          codes.forEach(code => {
+          const codeContainer = document.createElement("div");
+          codeContainer.style.cssText = "position: relative; display: inline-block; margin: 4px;";
+          
+          const codeBadge = document.createElement("span");
+          codeBadge.style.cssText = "padding: 6px 28px 6px 12px; background: #3498db; color: white; border-radius: 4px; font-weight: 600; font-size: 13px; display: inline-block; cursor: help;";
+          codeBadge.textContent = code;
+          
+          // Add hover tooltip with full content
+          const codeContent = getCodeContent(code);
+          if (codeContent) {
+            // Don't set title attribute - we use custom tooltip instead
+            codeBadge.setAttribute("data-content", codeContent);
+            
+            // Enhanced hover: show full content in a styled tooltip
+            let tooltip = null;
+            codeBadge.onmouseenter = (e) => {
+              if (tooltip) return;
+              tooltip = document.createElement("div");
+              tooltip.style.cssText = "position: fixed; background: #2c3e50; color: white; padding: 12px; border-radius: 6px; max-width: 500px; z-index: 1000; font-size: 12px; line-height: 1.5; box-shadow: 0 4px 12px rgba(0,0,0,0.3); white-space: pre-wrap; word-wrap: break-word; pointer-events: none;";
+              tooltip.textContent = codeContent.replace(/\{([^}]+)\}/g, "");
+              document.body.appendChild(tooltip);
+              
+              const rect = codeBadge.getBoundingClientRect();
+              // Position tooltip directly below the badge, aligned to left edge
+              tooltip.style.left = rect.left + "px";
+              tooltip.style.top = (rect.bottom + 4) + "px";
+              
+              // Adjust if tooltip would go off screen
+              const tooltipRect = tooltip.getBoundingClientRect();
+              if (tooltipRect.right > window.innerWidth) {
+                tooltip.style.left = (window.innerWidth - tooltipRect.width - 10) + "px";
+              }
+              if (tooltipRect.bottom > window.innerHeight) {
+                tooltip.style.top = (rect.top - tooltipRect.height - 4) + "px";
+              }
+            };
+            codeBadge.onmouseleave = () => {
+              if (tooltip) {
+                tooltip.remove();
+                tooltip = null;
+              }
+            };
+          }
+          
+          // Remove button (X)
+          const removeBtn = document.createElement("button");
+          removeBtn.innerHTML = "×";
+          removeBtn.style.cssText = "position: absolute; right: 4px; top: 50%; transform: translateY(-50%); background: rgba(255,255,255,0.3); border: none; color: white; width: 18px; height: 18px; border-radius: 50%; cursor: pointer; font-size: 16px; line-height: 1; padding: 0; display: flex; align-items: center; justify-content: center;";
+          removeBtn.onmouseover = () => { removeBtn.style.background = "rgba(255,255,255,0.5)"; };
+          removeBtn.onmouseout = () => { removeBtn.style.background = "rgba(255,255,255,0.3)"; };
+          removeBtn.onclick = (e) => {
+            e.stopPropagation();
+            dismissCode(code);
+            renderPanels(); // Re-render to update codes
+          };
+          
+            codeContainer.appendChild(codeBadge);
+            codeContainer.appendChild(removeBtn);
+            container.appendChild(codeContainer);
+          });
+        }
+      }
+      
+      // Render standard codes
+      const codesSection = $("codes-section");
+      const codesContent = $("codes-content");
+      if (activeCodes && activeCodes.length > 0) {
+        codesSection.style.display = "block";
+        renderCodeBadges(activeCodes, codesContent);
+      } else {
+        codesSection.style.display = "none";
+        codesContent.innerHTML = "";
+      }
+      
+      // Render optional codes
+      const optionalCodesSection = $("optional-codes-section");
+      const optionalCodesContent = $("optional-codes-content");
+      if (activeOptionalCodes && activeOptionalCodes.length > 0) {
+        optionalCodesSection.style.display = "block";
+        renderCodeBadges(activeOptionalCodes, optionalCodesContent);
+      } else {
+        optionalCodesSection.style.display = "none";
+        optionalCodesContent.innerHTML = "";
+      }
+
     }
 
     // ===== EVENT HANDLERS =====
-
-    $("btnParse").onclick = () => {
-      parsed = parseCoagText($("raw").value);
-      render();
-    };
-
-    $("filter").oninput = () => renderPanels();
+    
+    // Wait for DOM to be ready
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', initHandlers);
+    } else {
+      initHandlers();
+    }
+    
+    function initHandlers() {
+      const btnParse = $("btnParse");
+      const filter = $("filter");
+      
+      if (btnParse) {
+        btnParse.onclick = () => {
+          try {
+            parsed = parseCoagText($("raw").value);
+            render();
+          } catch (e) {
+            console.error("Parse error:", e);
+            alert("Error parsing data: " + e.message);
+          }
+        };
+      } else {
+        console.error("btnParse button not found!");
+      }
+      
+      if (filter) {
+        filter.oninput = () => renderPanels();
+      }
+    }
 
     // ===== HELPER FUNCTIONS =====
 
