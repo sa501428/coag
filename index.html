@@ -95,52 +95,6 @@
     .toolbar { display:flex; gap: 8px; align-items:center; }
     .pill { font-size: 12px; color: var(--muted); }
     .hint { font-size: 12px; color: var(--muted); padding-top: 6px; }
-    #commentBuilder:empty:before {
-      content: attr(data-placeholder);
-      color: #999;
-      pointer-events: none;
-    }
-    .smart-select {
-      display: inline-block;
-      padding: 2px 8px;
-      margin: 0 2px;
-      border: 1px solid #4a90e2;
-      border-radius: 4px;
-      background: #e8f4fd;
-      color: #1a5490;
-      cursor: pointer;
-      font-size: inherit;
-      font-family: inherit;
-      vertical-align: baseline;
-      box-sizing: border-box;
-    }
-    .smart-select:focus {
-      outline: 2px solid #4a90e2;
-      outline-offset: 1px;
-      background: #d0e8fc;
-    }
-    .smart-select:hover {
-      background: #d0e8fc;
-    }
-    .smart-input {
-      display: inline-block;
-      padding: 2px 6px;
-      margin: 0 2px;
-      border: 1px solid #f59e0b;
-      border-radius: 4px;
-      background: #fff3cd;
-      color: #856404;
-      font-size: inherit;
-      font-family: inherit;
-      width: 60px;
-      text-align: center;
-      vertical-align: baseline;
-    }
-    .smart-input:focus {
-      outline: 2px solid #f59e0b;
-      outline-offset: 1px;
-      background: #ffecb3;
-    }
     @media (max-width: 980px) {
       .layout { grid-template-columns: 1fr; }
       .search { width: 100%; max-width: none; }
@@ -160,29 +114,6 @@
     </div>
   </div>
 </header>
-
-<section class="panel" aria-label="Notes" style="max-width: 100%; margin: 18px 18px 0 18px;">
-  <div class="hd"><h2>Notes</h2></div>
-  <div class="bd">
-    <div class="row">
-      <textarea id="notesBox" placeholder="Free space for notes..." style="width: 100%; min-height: 120px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); font-family: var(--sans); background: #fff; resize: vertical; font-size: 14px; line-height: 1.5;"></textarea>
-    </div>
-  </div>
-</section>
-
-<section class="panel" aria-label="Comment Builder" style="max-width: 100%; margin: 18px;">
-  <div class="hd"><h2>Comment Builder</h2></div>
-  <div class="bd">
-    <div class="row">
-      <label class="pill">Type codes and press F8 to expand, or click + on codes to add</label>
-      <div id="commentBuilder" contenteditable="true" style="width: 100%; min-height: 200px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); font-family: var(--sans); background: #fff; white-space: pre-wrap; word-wrap: break-word;" data-placeholder="Type codes here (e.g., N1 L1 D1) and press F8 to expand them to full comments..."></div>
-      <div style="margin-top: 8px; display: flex; gap: 8px;">
-        <button class="btn" id="getResolvedText" style="font-size: 12px;">Get Resolved Text</button>
-        <button class="btn" id="clearBuilder" style="font-size: 12px;">Clear</button>
-      </div>
-    </div>
-  </div>
-</section>
 
 <main class="layout">
   <section class="panel" aria-label="Filters">
@@ -297,17 +228,24 @@ const CATEGORIES = [
   ["Genetic thrombophilia (FVL / Prothrombin G20210A)", ["factor v leiden","fvl","g20210a","prothrombin gene","apc resistance"]],
   ["Anticoagulant interference (heparin / DOAC / warfarin)", ["hepzyme","heparin","apixaban","rivaroxaban","doac","coumadin","warfarin","anti-xa"]],
   ["Mixing study / inhibitor evaluation", ["mixing study","inhibitor","correction","incubation"]],
+  ["Hemophilia", ["hemophilia a","hemophilia b","emicizumab","altuviiio","advate","jivi","eloctate","recombinant fviii","hemlibra","efanesoctocog"]],
+  ["Von Willebrand factor / Factor VIII", ["von willebrand","vwf","factor viii","factor 8","fviii","desmopressin","dhr","vwd"]],
+  ["Factor deficiencies (VII / IX / X / XI / XII / XIII)", ["factor vii","factor 7","factor ix","factor 9","factor x","factor 10","factor xi","factor 11","factor xii","factor 12","factor xiii","factor 13","fvii","fix","fx","fxi","fxii","fxiii"]],
+  ["Fibrinogen / DIC / Thrombin time", ["fibrinogen","dic","disseminated intravascular","thrombin time","reptilase","dysfibrinogenemia"]],
+  ["Liver disease / Acquired conditions", ["liver","hepatic","ecmo","mechanical circulatory","aortic stenosis","waldenström","thrombocythemia","amyloidosis"]],
+  ["Neonatal / Pediatric coagulation", ["neonatal","pediatric","neonate","infant","birth","age 6 months"]],
+  ["Prothrombin fragment / Hypercoagulability markers", ["prothrombin fragment","pf1+2","hypercoagulable","hypercoagulability"]],
 ];
 
 function categorize(comment) {
   const t = (comment || "").toLowerCase();
-  let best = "Other", bestScore = 0;
+  const categories = [];
   for (const [cat, kws] of CATEGORIES) {
     let s = 0;
     for (const kw of kws) if (t.includes(kw)) s++;
-    if (s > bestScore) { bestScore = s; best = cat; }
+    if (s > 0) categories.push(cat);
   }
-  return bestScore > 0 ? best : "Other";
+  return categories.length > 0 ? categories : ["Other"];
 }
 
 function detectStatus(comment, analyte) {
@@ -389,16 +327,10 @@ const DATA = RAW.map(r => {
   return {
     code: (r.code || "").trim(),
     comment,
-    category: categorize(comment),
+    categories: categorize(comment),
     tags: buildTags(comment),
   };
 });
-
-// Code lookup map for quick access
-const CODE_MAP = new Map();
-for (const rec of DATA) {
-  CODE_MAP.set(rec.code.toUpperCase(), rec.comment);
-}
 
 // ------------------------------ UI -----------------------------------
 
@@ -431,7 +363,8 @@ function tokenize(s) {
 
 function scoreRecord(rec, qTokens) {
   if (!qTokens.length) return 0;
-  const hay = (rec.code + " " + rec.category + " " + rec.comment).toLowerCase();
+  const categoriesStr = (rec.categories || []).join(" ");
+  const hay = (rec.code + " " + categoriesStr + " " + rec.comment).toLowerCase();
   let score = 0;
   for (const t of qTokens) if (hay.includes(t)) score += 1;
   if (qTokens.length && rec.code.toLowerCase().startsWith(qTokens[0])) score += 2;
@@ -471,7 +404,9 @@ function filterData() {
   const qTokens = tokenize(q);
   let arr = DATA.slice();
 
-  if (state.category !== "ALL") arr = arr.filter(r => r.category === state.category);
+  if (state.category !== "ALL") {
+    arr = arr.filter(r => (r.categories || []).includes(state.category));
+  }
 
   if (qTokens.length) {
     arr = arr.map(r => ({...r, _score: scoreRecord(r, qTokens)})).filter(r => r._score > 0);
@@ -481,7 +416,13 @@ function filterData() {
 
   const sort = el("sort").value;
   if (sort === "code") arr.sort((a,b) => a.code.localeCompare(b.code));
-  else if (sort === "category") arr.sort((a,b) => (a.category + a.code).localeCompare(b.category + b.code));
+  else if (sort === "category") {
+    arr.sort((a,b) => {
+      const aCats = (a.categories || []).join(", ");
+      const bCats = (b.categories || []).join(", ");
+      return (aCats + a.code).localeCompare(bCats + b.code);
+    });
+  }
   else arr.sort((a,b) => (b._score - a._score) || a.code.localeCompare(b.code));
 
   return {arr, q};
@@ -520,7 +461,7 @@ function renderCards(records) {
 
     const cat = document.createElement("div");
     cat.className = "cat";
-    cat.textContent = rec.category;
+    cat.textContent = (rec.categories || []).join(", ") || "Other";
 
     left.appendChild(code);
     left.appendChild(cat);
@@ -547,17 +488,6 @@ function renderCards(records) {
     right.style.flexWrap = "wrap";
     right.style.justifyContent = "flex-end";
 
-    const addBtn = document.createElement("button");
-    addBtn.className = "btn";
-    addBtn.textContent = "+";
-    addBtn.title = "Add code to comment builder";
-    addBtn.style.minWidth = "32px";
-    addBtn.style.padding = "8px 10px";
-    addBtn.addEventListener("click", (ev) => {
-      ev.preventDefault(); ev.stopPropagation();
-      addCodeToBuilder(rec.code);
-    });
-
     const copyBtn = document.createElement("button");
     copyBtn.className = "btn";
     copyBtn.textContent = "Copy code";
@@ -569,7 +499,6 @@ function renderCards(records) {
     });
 
     right.appendChild(chips);
-    right.appendChild(addBtn);
     right.appendChild(copyBtn);
 
     s.appendChild(left);
@@ -600,9 +529,21 @@ function renderCategories() {
   tree.innerHTML = "";
 
   const counts = new Map();
-  for (const r of DATA) counts.set(r.category, (counts.get(r.category) || 0) + 1);
+  // Count codes in each category (a code can be in multiple categories)
+  for (const r of DATA) {
+    const cats = r.categories || [];
+    if (cats.length === 0) {
+      counts.set("Other", (counts.get("Other") || 0) + 1);
+    } else {
+      for (const cat of cats) {
+        counts.set(cat, (counts.get(cat) || 0) + 1);
+      }
+    }
+  }
 
-  const cats = Array.from(counts.keys()).sort((a,b)=>counts.get(b)-counts.get(a) || a.localeCompare(b));
+  // Get all category names from CATEGORIES array, plus "Other"
+  const allCats = [...CATEGORIES.map(c => c[0]), "Other"];
+  const cats = allCats.filter(c => counts.has(c)).sort((a,b)=>counts.get(b)-counts.get(a) || a.localeCompare(b));
 
   const addBtn = (cat,label,count) => {
     const b = document.createElement("button");
@@ -631,321 +572,6 @@ function render() {
   renderCards(arr);
 }
 
-// ------------------------- COMMENT BUILDER ---------------------------
-
-// Global counter for smart element IDs to ensure uniqueness across all comments
-let globalSmartIdCounter = 0;
-
-// Parse smart text and convert to HTML with interactive elements
-function parseSmartText(text) {
-  if (!text) return '';
-  
-  let html = '';
-  let i = 0;
-  
-  while (i < text.length) {
-    // Check for curly brace smart list {option1; option2; option3}
-    if (text[i] === '{' && i + 1 < text.length) {
-      const braceEnd = text.indexOf('}', i);
-      if (braceEnd !== -1) {
-        const braceContent = text.substring(i + 1, braceEnd);
-        const options = braceContent.split(';').map(opt => opt.trim()).filter(opt => opt);
-        
-        if (options.length > 0) {
-          const smartId = 'smart_' + (globalSmartIdCounter++);
-          // Calculate width based on longest option (rough estimate: ~8px per character)
-          const longestOption = options.reduce((a, b) => a.length > b.length ? a : b);
-          const estimatedWidth = Math.max(80, longestOption.length * 8 + 30); // min 80px, add padding
-          html += `<select class="smart-select" data-smart-id="${smartId}" data-original="{${braceContent}}" style="width: ${estimatedWidth}px;">`;
-          options.forEach(opt => {
-            html += `<option value="${opt.replace(/"/g, '&quot;')}">${opt}</option>`;
-          });
-          html += '</select>';
-          i = braceEnd + 1;
-          continue;
-        }
-      }
-    }
-    
-    // Check for *** placeholder
-    if (text.substring(i, i + 3) === '***') {
-      const smartId = 'smart_' + (globalSmartIdCounter++);
-      // Check for units after *** (common patterns: "*** %", "*** seconds", "*** mg/dl", etc.)
-      let unit = '';
-      let j = i + 3;
-      // Skip spaces
-      while (j < text.length && text[j] === ' ') j++;
-      // Capture unit (alphanumeric, %, /, etc.)
-      const unitStart = j;
-      while (j < text.length && /[a-zA-Z0-9%\/]/.test(text[j])) {
-        unit += text[j];
-        j++;
-      }
-      html += `<input type="text" class="smart-input" data-smart-id="${smartId}" data-original="***" data-unit="${unit}" placeholder="***" style="width: ${unit ? '90px' : '60px'}">`;
-      if (unit) html += `<span style="margin-left: 2px; color: var(--muted);">${unit}</span>`;
-      i = j;
-      continue;
-    }
-    
-    // Regular character - escape HTML
-    if (text[i] === '<') html += '&lt;';
-    else if (text[i] === '>') html += '&gt;';
-    else if (text[i] === '&') html += '&amp;';
-    else if (text[i] === '\n') html += '<br>';
-    else html += text[i];
-    i++;
-  }
-  
-  return html;
-}
-
-// Get resolved text from contenteditable div (replaces smart elements with their values)
-function getResolvedText(builderEl) {
-  // Use TreeWalker to get all nodes in document order and collect values directly
-  const parts = [];
-  const walker = document.createTreeWalker(
-    builderEl,
-    NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT,
-    {
-      acceptNode: function(node) {
-        // Skip children of smart-select and smart-input (like option elements)
-        if (node.parentNode) {
-          if (node.parentNode.classList && 
-              (node.parentNode.classList.contains('smart-select') || 
-               node.parentNode.classList.contains('smart-input'))) {
-            return NodeFilter.FILTER_REJECT;
-          }
-        }
-        // Skip unit spans that follow smart-input
-        if (node.nodeType === Node.ELEMENT_NODE && 
-            node.tagName === 'SPAN' && 
-            node.previousSibling && 
-            node.previousSibling.nodeType === Node.ELEMENT_NODE &&
-            node.previousSibling.classList && 
-            node.previousSibling.classList.contains('smart-input')) {
-          return NodeFilter.FILTER_REJECT; // Skip this node and its children
-        }
-        // For smart-select and smart-input elements, we want to process them but skip their children
-        if (node.nodeType === Node.ELEMENT_NODE &&
-            node.classList &&
-            (node.classList.contains('smart-select') || node.classList.contains('smart-input'))) {
-          return NodeFilter.FILTER_ACCEPT; // Accept the element itself, but children will be rejected by parent check
-        }
-        return NodeFilter.FILTER_ACCEPT;
-      }
-    }
-  );
-  
-  let node;
-  while (node = walker.nextNode()) {
-    if (node.nodeType === Node.TEXT_NODE) {
-      // Add all text content - these are processed in document order
-      parts.push(node.textContent);
-    } else if (node.nodeType === Node.ELEMENT_NODE) {
-      if (node.tagName === 'BR') {
-        parts.push('\n');
-      } else if (node.classList && node.classList.contains('smart-select')) {
-        // Get the selected value directly from this select element
-        // Use selectedIndex to get the actual selected option
-        const selectedIndex = node.selectedIndex;
-        if (selectedIndex >= 0 && selectedIndex < node.options.length) {
-          const selectedOption = node.options[selectedIndex];
-          parts.push(selectedOption.value || '');
-        } else {
-          // Fallback to value property
-          parts.push(node.value || '');
-        }
-      } else if (node.classList && node.classList.contains('smart-input')) {
-        // Get the value directly from this input element
-        const value = node.value.trim() || '***';
-        const unit = node.dataset.unit || '';
-        const fullValue = value + (unit && value !== '***' ? ' ' + unit : '');
-        parts.push(fullValue);
-      }
-      // For other elements (like DIV, P, etc.), TreeWalker will automatically 
-      // process their text children in document order, so we don't need to do anything here
-    }
-  }
-  
-  let text = parts.join('');
-  
-  // Normalize multiple spaces but preserve newlines
-  text = text.replace(/[ \t]+/g, ' ');
-  // Clean up excessive newlines (more than 2 consecutive) but keep single/double newlines
-  text = text.replace(/\n{3,}/g, '\n\n');
-  // Trim leading/trailing whitespace but preserve internal newlines
-  return text.replace(/^\s+|\s+$/g, '');
-}
-
-// Insert smart text HTML into contenteditable at cursor position
-function insertSmartTextAtCursor(builderEl, smartHtml) {
-  const selection = window.getSelection();
-  if (selection.rangeCount === 0) {
-    // No selection, append to end
-    const div = document.createElement('div');
-    div.innerHTML = smartHtml;
-    while (div.firstChild) {
-      builderEl.appendChild(div.firstChild);
-    }
-    return;
-  }
-  
-  const range = selection.getRangeAt(0);
-  range.deleteContents();
-  
-  const div = document.createElement('div');
-  div.innerHTML = smartHtml;
-  const frag = document.createDocumentFragment();
-  while (div.firstChild) {
-    frag.appendChild(div.firstChild);
-  }
-  
-  range.insertNode(frag);
-  range.collapse(false);
-  selection.removeAllRanges();
-  selection.addRange(range);
-}
-
-function expandCodeInText(builderEl) {
-  const selection = window.getSelection();
-  if (selection.rangeCount === 0) return;
-  
-  const range = selection.getRangeAt(0);
-  let textNode = range.startContainer;
-  let offset = range.startOffset;
-  
-  // If we're not in a text node, try to find one
-  if (textNode.nodeType !== Node.TEXT_NODE) {
-    // Try to find text node at cursor
-    if (textNode.nodeType === Node.ELEMENT_NODE) {
-      const walker = document.createTreeWalker(
-        textNode,
-        NodeFilter.SHOW_TEXT,
-        null
-      );
-      textNode = walker.nextNode();
-      if (!textNode) return;
-      offset = textNode.textContent.length;
-    } else {
-      return;
-    }
-  }
-  
-  const text = textNode.textContent;
-  
-  // Find the word before the cursor
-  const beforeCursor = text.substring(0, offset);
-  const match = beforeCursor.match(/([A-Za-z0-9]+)$/);
-  if (!match) return;
-  
-  const code = match[1].toUpperCase();
-  const comment = CODE_MAP.get(code);
-  if (!comment) return;
-  
-  // Parse the comment to smart HTML
-  const smartHtml = parseSmartText(comment);
-  
-  // Replace the code with smart HTML
-  const beforeCode = text.substring(0, match.index);
-  const afterCursor = text.substring(offset);
-  
-  // Create fragment with before text, smart HTML, and after text
-  const frag = document.createDocumentFragment();
-  
-  if (beforeCode) {
-    frag.appendChild(document.createTextNode(beforeCode));
-  }
-  
-  // Insert smart HTML
-  const div = document.createElement('div');
-  div.innerHTML = smartHtml;
-  while (div.firstChild) {
-    frag.appendChild(div.firstChild);
-  }
-  
-  if (afterCursor) {
-    frag.appendChild(document.createTextNode(afterCursor));
-  }
-  
-  // Replace the text node with the fragment
-  textNode.parentNode.replaceChild(frag, textNode);
-  
-  // Set cursor after inserted smart content (before afterCursor if it exists)
-  const newRange = document.createRange();
-  if (afterCursor) {
-    // Find the last text node in the fragment (the afterCursor text)
-    const walker = document.createTreeWalker(
-      frag,
-      NodeFilter.SHOW_TEXT,
-      null
-    );
-    let lastTextNode = null;
-    let node;
-    while (node = walker.nextNode()) {
-      lastTextNode = node;
-    }
-    if (lastTextNode) {
-      newRange.setStart(lastTextNode, 0);
-    } else {
-      newRange.setStartAfter(frag.lastChild || frag);
-    }
-  } else {
-    newRange.setStartAfter(frag.lastChild || frag);
-  }
-  newRange.collapse(true);
-  selection.removeAllRanges();
-  selection.addRange(newRange);
-}
-
-function addCodeToBuilder(code) {
-  const builderEl = el("commentBuilder");
-  const comment = CODE_MAP.get(code.toUpperCase());
-  
-  if (!comment) {
-    // If no comment found, just add the code as text
-    const textNode = document.createTextNode(code + ' ');
-    builderEl.appendChild(textNode);
-    const range = document.createRange();
-    range.setStartAfter(textNode);
-    range.collapse(true);
-    const selection = window.getSelection();
-    selection.removeAllRanges();
-    selection.addRange(range);
-    builderEl.focus();
-    return;
-  }
-  
-  // Parse comment to smart HTML
-  const smartHtml = parseSmartText(comment);
-  
-  // Add newline if there's existing content
-  if (builderEl.textContent.trim().length > 0) {
-    builderEl.appendChild(document.createElement('br'));
-  }
-  
-  // Insert smart HTML - using a temporary container to preserve text nodes
-  const tempContainer = document.createElement('div');
-  tempContainer.innerHTML = smartHtml;
-  const frag = document.createDocumentFragment();
-  // Move all nodes (including text nodes) to fragment to preserve order
-  while (tempContainer.firstChild) {
-    frag.appendChild(tempContainer.firstChild);
-  }
-  builderEl.appendChild(frag);
-  
-  // Add a space after
-  builderEl.appendChild(document.createTextNode(' '));
-  
-  // Set cursor at end
-  const range = document.createRange();
-  range.selectNodeContents(builderEl);
-  range.collapse(false);
-  const selection = window.getSelection();
-  selection.removeAllRanges();
-  selection.addRange(range);
-  builderEl.focus();
-}
-
 function init() {
   el("q").addEventListener("input", () => {
     clearTimeout(window.__t);
@@ -954,37 +580,6 @@ function init() {
 
   el("sort").addEventListener("change", render);
   el("resetBtn").addEventListener("click", resetState);
-
-  // Comment builder: expand codes on F8
-  const commentBuilder = el("commentBuilder");
-  commentBuilder.addEventListener("keydown", (ev) => {
-    if (ev.key === 'F8' || ev.code === 'F8') {
-      ev.preventDefault();
-      expandCodeInText(commentBuilder);
-    }
-  });
-  
-  // Get resolved text button
-  el("getResolvedText").addEventListener("click", () => {
-    const resolved = getResolvedText(commentBuilder);
-    const textarea = document.createElement('textarea');
-    textarea.value = resolved;
-    document.body.appendChild(textarea);
-    textarea.select();
-    document.execCommand('copy');
-    document.body.removeChild(textarea);
-    
-    const btn = el("getResolvedText");
-    const originalText = btn.textContent;
-    btn.textContent = "Copied!";
-    setTimeout(() => btn.textContent = originalText, 1000);
-  });
-  
-  // Clear builder button
-  el("clearBuilder").addEventListener("click", () => {
-    commentBuilder.innerHTML = '';
-    commentBuilder.focus();
-  });
 
   renderCategories();
   render();
